@@ -30,6 +30,18 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
 
 ---
 
+## Who does the judging
+
+The judgment steps (5, 6a, 6b, 7) are REAL model calls made by the
+functions in `src/literature_extractor.py` through `src/llm_client.py`
+(OpenAI-compatible endpoint; on CyVerse this is the AI Verde gateway with
+a Claude-series model, configured by `OPENAI_API_KEY`, `LLM_API_BASE`,
+`LLM_MODEL`). A coding assistant driving this repo (Roo Code, Claude
+Code, …) runs `workflows/run_extraction.py` and reads its output; it
+must NOT read the PDF itself and type values into the table. That keeps
+every extracted value reproducible, logged (model, tokens, evidence
+quote) and re-runnable by someone else.
+
 ## Core Steps
 
 1. **Check the PDF is readable** — `python scripts/check_pdf.py <path>`. If it
@@ -56,24 +68,31 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
    `extraction_method: regex` or `gazetteer`. Do not re-ask the LLM for a
    field this step already filled.
 5. **Classify response type** — `classify_response_type()`. One cheap LLM
-   call reading the Abstract + Results headers/captions. Output populates
-   `response_types_detected` (e.g. `"yield,ghg_n2o"`) and determines which
-   Block 2 sub-blocks (`yield_data`, `ghg_data`, `soc_data`,
-   `nitrogen_data`) to even attempt. A paper can hit more than one
-   sub-block — do not assume exclusivity.
-6. **Narrow LLM extraction** — `extract_narrow_llm()`. One consolidated
-   call per paper, scoped ONLY to the section text located in step 3 —
-   never the full paper. Covers every field with `extraction_method:
-   narrow_llm` that step 4 didn't already fill, split by section: Methods
-   text → Block 1 narrow fields, Results text → the Block 2 sub-blocks
-   named in `response_types_detected`.
+   call (through `src/llm_client.py`) reading the Abstract + the start of
+   Results. Output populates `response_types_detected` (e.g.
+   `"yield,ghg_n2o"`) and determines which Block 2 sub-blocks (`yield`,
+   `ghg`, `soc`, `nitrogen`) to even attempt. A paper can hit more than
+   one — do not assume exclusivity. No supported type → Block 2 stays
+   blank and the paper is logged.
+6. **Narrow LLM extraction — two calls per paper**, both scoped ONLY to
+   the section text located in step 3, never the full paper:
+   - 6a `enumerate_experimental_units()` — Methods + Results + the
+     species candidate list from step 4 → the LIST OF ROWS the paper
+     contributes. One row = one design combination (cover crop
+     treatment/species × year × site × …) × one response variable (yield,
+     ONE gas, SOC, one nitrogen metric). Each unit carries its own
+     species/year/… plus the `{block}_cc_mean / _control_mean / _sd /
+     _unit / _n` values and `gas_type` / `nitrogen_type`. Species that
+     appear only as cash crops or rotation partners are not rows.
+   - 6b `extract_narrow_llm()` — Methods text → the paper-level Block 1
+     `narrow_llm` fields step 4 didn't fill (country, location,
+     irrigation_raw, soil_texture_raw, …), shared by every row.
 7. **Vision extraction, only if needed** — `extract_vision_llm()`. Trigger
-   ONLY when a Results value is explicitly referenced as being in a
-   figure (e.g. "as shown in Fig. 3") and step 6 did not find it in text.
-   Render the specific PDF page to an image (code, no LLM) and pass only
-   that image to a vision-capable call. **Rule: any field filled this way
-   is capped at `medium` confidence, never `high`, unless the figure
-   prints an explicit numeric data label** — chart-reading is an
+   ONLY when a unit's value came back null with a figure reference in its
+   evidence (e.g. "Fig. 3") — render that PDF page to an image (code, no
+   LLM) and pass only that image to a vision-capable call. **Rule: any
+   field filled this way is capped at `medium` confidence unless the
+   figure prints an explicit numeric data label** — chart-reading is an
    estimate, not a measurement.
 8. **Normalize** — `normalize_fields()`. For every `_raw` field with a
    paired `_norm` field in the schema, apply the controlled-vocabulary
@@ -93,7 +112,9 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
     for real on an environment with open network access (e.g. CyVerse).**
     When step 4's regex value and step 6's LLM value disagree on the same
     field, do not silently prefer one — flag for human review.
-11. **Confidence-tag and assemble the row** — `assemble_row()`. Every
+11. **Confidence-tag and assemble the rows** — `assemble_rows()`. Shared
+    Block 1 fields are merged into every unit from step 6a; steps 8-9
+    run per row. Every
     extracted field gets a `high` / `medium` / `low` confidence and a
     one-line source note, same convention as the prior Book4.xlsx
     year-extraction pass: `high` = deterministic match or a verbatim
@@ -102,7 +123,7 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
     publication-year-minus-lag, or any other estimate. A field the
     pipeline cannot fill after all of the above stays blank — never
     fabricate a value to complete a row.
-12. **Write output and log** — `run_extraction()` appends the row to
+12. **Write output and log** — `run_extraction()` appends the rows to
     `workflows/<project_name>/output/`, then **append to
     `PROMPT_ACTION_LOG.md`** — date, user's exact prompt, model name,
     files inspected, actions taken, verification performed, and any
@@ -124,7 +145,10 @@ scripts/                             Pre-flight helper scripts
   check_urls.py
   find_species.py
 examples/book4_reference/            Reference example (read-only) — target output shape
+src/llm_client.py                    The ONLY place that calls a model (OpenAI-compatible API)
+workflows/run_extraction.py          Generic CLI runner (use this unless a custom script is needed)
 workflows/<project_name>/            Each extraction run gets its own folder
+  input/                             PDFs for this run (optional)
   <script>.py
   output/                            Generated table(s), append-only
 docs/                                Not yet built for this project — see README for status
@@ -151,6 +175,15 @@ from src.literature_extractor import (
 )
 ```
 
+For most runs you do not need a new script at all:
+
+```bash
+export OPENAI_API_KEY=...            # AI Verde key
+export LLM_MODEL=anthropic/claude-sonnet-4   # whatever AI Verde lists
+python workflows/run_extraction.py --project <name> --pdf <file.pdf> --prompt "<user's request>"
+python workflows/run_extraction.py --project <name> --pdf <file.pdf> --no-llm   # deterministic only
+```
+
 ---
 
 ## Batch Runs
@@ -171,7 +204,8 @@ failure against that paper, continue to the next.
 
 ## Output Requirements
 
-- One row per treatment comparison, appended to
+- One row per (design combination × response variable) — see step 6a —
+  appended to
   `workflows/<project_name>/output/<name>.csv` (or `.xlsx` if the user
   asked for Excel), columns exactly matching `schema/cover_crop_schema.yml`
   in field order.

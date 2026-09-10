@@ -17,6 +17,6 @@ requests>=2.28
 # Testing
 pytest>=7.0
 
-# NOTE: LLM calls (classify_response_type, extract_narrow_llm,
-# extract_vision_llm) are stubs in src/literature_extractor.py — add
-# your model provider's SDK here once you wire them (e.g. anthropic>=0.40).
+# LLM calls (src/llm_client.py) — any OpenAI-compatible endpoint; on
+# CyVerse this is the AI Verde gateway (Claude-series models).
+openai>=1.40

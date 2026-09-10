@@ -29,6 +29,14 @@
 #     its variance — same response-ratio meta-analysis method already
 #     in use, just generalized beyond yield.
 #
+#   ROW GRANULARITY (v0.5): one row = one experimental-design
+#     combination (cover crop treatment/species x year x site x ...)
+#     x one response variable (yield, or one gas, or SOC, or one
+#     nitrogen metric). A paper therefore yields MANY rows; Block 1
+#     fields that the paper states once (coordinates, country, tillage)
+#     are repeated on every row. The "enumerate experimental units"
+#     pipeline stage produces this row list.
+#
 # This schema supersedes the earlier draft based on Garba et al. (2022)
 # Table S1-S3, which is no longer used as a schema reference.
 #
@@ -67,7 +75,7 @@
 #
 # ══════════════════════════════════════════════════════════════════════════
 
-schema_version: "0.4"
+schema_version: "0.5"
 sheet_name: yield_record
 source_reference: Table_S1_for_myself.xlsx (sheet "Yield Record")
 
@@ -566,129 +574,66 @@ fields:
       extraction_method: computed_downstream
       description: Legacy variant from the source file's SD-imputation history. Computed.
 
-  # ── GHG (CO2 / N2O / CH4) ────────────────────────────────────────────
+  # ── GHG (CO2 / N2O / CH4) — LONG format ─────────────────────────────
+  # One row per gas. A paper that reports CO2 and N2O for the same
+  # treatment produces two rows sharing every Block 1 field and
+  # differing only in gas_type + the ghg_* values (same convention as
+  # nitrogen_type below, and the same shape as the user's working
+  # Book1.xlsx, where co2 and n2o are separate rows with generic
+  # cc / no_cc value columns). Decided 2026-09-10; supersedes the earlier
+  # wide layout (ghg_co2_* / ghg_n2o_* / ghg_ch4_* side by side).
   ghg_data:
-    - name: ghg_co2_cc_mean
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-      description: Mean CO2 flux/emission under the cover crop treatment.
-    - name: ghg_co2_control_mean
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-      description: Mean CO2 flux/emission under the control (fallow) treatment.
-    - name: ghg_co2_cc_sd
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_co2_control_sd
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_co2_unit
+    - name: gas_type
       type: string
       nullable: true
-      status: proposed_new
+      status: active
       extraction_method: narrow_llm
-      description: e.g. "kg CO2-C ha-1", "mg CO2 m-2 h-1".
-    - name: ghg_co2_n
-      type: integer
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_co2_ln_response_ratio
-      type: float
-      status: proposed_new
-      extraction_method: computed_downstream
-    - name: ghg_co2_var_lnr
-      type: float
-      status: proposed_new
-      extraction_method: computed_downstream
-
-    - name: ghg_n2o_cc_mean
+      controlled_vocabulary: ["co2", "n2o", "ch4"]
+      description: Which greenhouse gas this row's ghg_* values describe. Required whenever any ghg_* field is filled.
+    - name: ghg_cc_mean
       type: float
       nullable: true
-      status: proposed_new
+      status: active
       extraction_method: narrow_llm
-      description: Mean N2O flux/emission under the cover crop treatment.
-    - name: ghg_n2o_control_mean
+      description: Mean flux / cumulative emission of gas_type under the cover crop treatment.
+    - name: ghg_control_mean
       type: float
       nullable: true
-      status: proposed_new
+      status: active
       extraction_method: narrow_llm
-    - name: ghg_n2o_cc_sd
+      description: Mean flux / cumulative emission of gas_type under the no-cover-crop control.
+    - name: ghg_cc_sd
       type: float
       nullable: true
-      status: proposed_new
+      status: active
       extraction_method: narrow_llm
-    - name: ghg_n2o_control_sd
+    - name: ghg_control_sd
       type: float
       nullable: true
-      status: proposed_new
+      status: active
       extraction_method: narrow_llm
-    - name: ghg_n2o_unit
+    - name: ghg_unit
       type: string
       nullable: true
-      status: proposed_new
+      status: active
       extraction_method: narrow_llm
-    - name: ghg_n2o_n
+      description: Verbatim unit, e.g. "kg N2O-N ha-1", "g CO2-C m-2 d-1", "kg CH4-C ha-1 yr-1". Also record the integration period if the unit does not imply it (see notes).
+    - name: ghg_n
       type: integer
       nullable: true
-      status: proposed_new
+      status: active
       extraction_method: narrow_llm
-    - name: ghg_n2o_ln_response_ratio
+      description: Replicates per treatment mean.
+    - name: ghg_ln_response_ratio
       type: float
-      status: proposed_new
+      status: active
       extraction_method: computed_downstream
-    - name: ghg_n2o_var_lnr
+      description: "ln(ghg_cc_mean / ghg_control_mean). Computed, never extracted."
+    - name: ghg_var_lnr
       type: float
-      status: proposed_new
+      status: active
       extraction_method: computed_downstream
-
-    - name: ghg_ch4_cc_mean
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-      description: Mean CH4 flux/emission under the cover crop treatment.
-    - name: ghg_ch4_control_mean
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_ch4_cc_sd
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_ch4_control_sd
-      type: float
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_ch4_unit
-      type: string
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_ch4_n
-      type: integer
-      nullable: true
-      status: proposed_new
-      extraction_method: narrow_llm
-    - name: ghg_ch4_ln_response_ratio
-      type: float
-      status: proposed_new
-      extraction_method: computed_downstream
-    - name: ghg_ch4_var_lnr
-      type: float
-      status: proposed_new
-      extraction_method: computed_downstream
+      description: "sd_cc^2/(n*cc_mean^2) + sd_ctrl^2/(n*ctrl_mean^2). Computed only when both SDs and n are present."
 
   # ── SOC (Soil Organic Carbon) ────────────────────────────────────────
   soc_data:
@@ -807,5 +752,5 @@ open_questions:
   - "cc_family_taxonomic (Unnamed: 12, sparse): keep as its own field, drop, or fold into cc_species_scientific lookup?"
   - "doi field: does a separate article-level table already exist (keyed by paper_id) holding DOI/citation, or should this row-level table carry doi directly?"
   - "cc_species_scientific: confirm whether to add this proposed field (Latin binomial, WFO/GBIF-validated)."
-  - "All of ghg_data / soc_data / nitrogen_data / yield_unit / response_types_detected are proposed_new — none exist in the source file. Confirm the field names and units before the extraction pipeline targets them."
+  - "soc_data / nitrogen_data / yield_unit / response_types_detected are proposed_new — none exist in the source file. Confirm the field names and units before the extraction pipeline targets them. (ghg_data was confirmed 2026-09-10 in its long-format form and is now active.)"
   - "Beyond yield/GHG/SOC/nitrogen, should the schema anticipate other ecosystem-service types seen in the literature (e.g. soil water content, weed suppression, disease) as future wide-table sub-blocks, or add those only when a paper actually needs one?"
