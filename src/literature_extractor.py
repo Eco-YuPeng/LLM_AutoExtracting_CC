@@ -98,15 +98,16 @@ def check_pdf_readable(pdf_path: Path) -> tuple[bool, str]:
         return False, "PDF has zero pages"
 
     # Sample the first few pages for extractable text
+    page_count = doc.page_count
     text_chars = 0
-    for i in range(min(3, doc.page_count)):
+    for i in range(min(3, page_count)):
         text_chars += len(doc[i].get_text().strip())
     doc.close()
 
     if text_chars < 50:
         return False, "No meaningful text layer found — likely a scanned image PDF with no OCR"
 
-    return True, f"OK — {doc.page_count} pages, text layer present"
+    return True, f"OK — {page_count} pages, text layer present"
 
 
 # ═══════════════════════════ Step 2: PDF → Markdown + identification ══════
@@ -156,26 +157,53 @@ def pdf_to_markdown(pdf_path: Path) -> tuple[str, dict]:
 # ═══════════════════════════ Step 3: Locate sections ══════════════════════
 
 METHODS_HEADING_PATTERN = re.compile(
-    r"^#{1,4}\s*\d{0,2}\.?\d{0,2}\.?\s*"
+    r"^#{1,4}\s*\**\s*(?:\d{1,2}\.?\s*)?"
     r"(Materials?\s+an?d?\s+Methods?|Methods?|Materials?\s*&\s*Methods?|"
-    r"Study\s+Site|Experimental\s+Design)\s*$",
+    r"Study\s+Site|Experimental\s+Design)\s*\**\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 RESULTS_HEADING_PATTERN = re.compile(
-    r"^#{1,4}\s*\d{0,2}\.?\d{0,2}\.?\s*"
-    r"(Results(\s+an?d?\s+Discussion)?)\s*$",
+    r"^#{1,4}\s*\**\s*(?:\d{1,2}\.?\s*)?"
+    r"(Results(\s+an?d?\s+Discussion)?)\s*\**\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Bounds the far end of a Results section when no explicit next section
+# is captured by RESULTS_HEADING_PATTERN's own match.
+DISCUSSION_HEADING_PATTERN = re.compile(
+    r"^#{1,4}\s*\**\s*(?:\d{1,2}\.?\s*)?"
+    r"(Discussion|Conclusions?|Acknowledgy?ments?)\s*\**\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 NEXT_TOPLEVEL_HEADING_PATTERN = re.compile(r"^#{1,2}\s+\S", re.MULTILINE)
 
-ABSTRACT_HEADING_PATTERN = re.compile(r"^#{1,4}\s*Abstract\s*$", re.IGNORECASE | re.MULTILINE)
+ABSTRACT_HEADING_PATTERN = re.compile(r"^#{1,4}\s*\**\s*Abstract\s*\**\s*$", re.IGNORECASE | re.MULTILINE)
 
 
-def _span_from_heading(text: str, heading_match: re.Match) -> str:
-    """Everything from a matched heading to the next top-level heading."""
+def _span_from_heading(text: str, heading_match: re.Match, end_pattern: "re.Pattern | None" = None) -> str:
+    """
+    Everything from a matched heading to the next boundary.
+
+    If end_pattern is given (e.g. Results' heading pattern bounding
+    Methods, or Discussion's bounding Results), use its next match as
+    the boundary, falling back to end-of-text if it isn't found —
+    NEVER to "the next heading of any kind", since real papers often
+    render subsection headings (e.g. "2.1 Site descriptions") at the
+    SAME markdown heading depth as their parent section ("2 Materials
+    and Methods"), which would cut the span off almost immediately.
+
+    If no end_pattern is given at all (the Abstract fallback case,
+    which has no natural "next known section" to bound it), fall back
+    to the next heading of any kind — Abstracts are short and don't
+    have this same-depth-subsection problem in practice.
+    """
     start = heading_match.end()
+    if end_pattern is not None:
+        end_match = end_pattern.search(text, pos=start)
+        end = end_match.start() if end_match else len(text)
+        return text[start:end].strip()
     next_heading = NEXT_TOPLEVEL_HEADING_PATTERN.search(text, pos=start)
     end = next_heading.start() if next_heading else len(text)
     return text[start:end].strip()
@@ -194,8 +222,17 @@ def locate_sections(markdown_text: str) -> dict:
     methods_match = METHODS_HEADING_PATTERN.search(markdown_text)
     results_match = RESULTS_HEADING_PATTERN.search(markdown_text)
 
-    methods_span = _span_from_heading(markdown_text, methods_match) if methods_match else None
-    results_span = _span_from_heading(markdown_text, results_match) if results_match else None
+    # Methods ends where Results begins (if found), not at the first
+    # same-level subsection heading.
+    methods_span = (
+        _span_from_heading(markdown_text, methods_match, end_pattern=RESULTS_HEADING_PATTERN)
+        if methods_match else None
+    )
+    # Results ends where Discussion/Conclusion begins (if found).
+    results_span = (
+        _span_from_heading(markdown_text, results_match, end_pattern=DISCUSSION_HEADING_PATTERN)
+        if results_match else None
+    )
 
     fallback_used = None
     if methods_span is None:
@@ -213,8 +250,24 @@ def locate_sections(markdown_text: str) -> dict:
 # ═══════════════════════════ Step 4: Deterministic extraction ═══════════
 
 COORD_PATTERN = re.compile(
-    r"(-?\d{1,3}\.\d+)\s*°?\s*[NnSs]?\s*[,;]?\s*(-?\d{1,3}\.\d+)\s*°?\s*[EeWw]?"
+    r"([−\-]?\d{1,3}\.\d+)\s*[°˚]?\s*([NnSs])?\s*[,;]?\s*"
+    r"([−\-]?\d{1,3}\.\d+)\s*[°˚]?\s*([EeWw])?"
 )
+
+
+def _parse_coord(number_str: str, compass_letter: str | None, negative_letters: str) -> float:
+    """
+    Normalizes a coordinate number string (handling the Unicode minus
+    sign U+2212 some PDF text layers use instead of ASCII '-') and
+    applies the correct sign: negative if the text's own minus sign
+    said so, OR if the compass letter (S/W) says so — never double-
+    negate when a paper writes both (e.g. "-100.92 W").
+    """
+    normalized = number_str.replace("\u2212", "-")
+    value = abs(float(normalized))
+    is_negative_by_text = normalized.startswith("-")
+    is_negative_by_letter = bool(compass_letter) and compass_letter.upper() in negative_letters
+    return -value if (is_negative_by_text or is_negative_by_letter) else value
 
 TILLAGE_KEYWORDS = {
     "no-till": "NT", "no till": "NT", "notill": "NT",
@@ -235,7 +288,9 @@ def extract_deterministic(section_text: str, data_catalog: dict) -> dict[str, Ex
 
     coord_match = COORD_PATTERN.search(section_text)
     if coord_match:
-        lat, lon = float(coord_match.group(1)), float(coord_match.group(2))
+        lat_str, lat_letter, lon_str, lon_letter = coord_match.groups()
+        lat = _parse_coord(lat_str, lat_letter, negative_letters="S")
+        lon = _parse_coord(lon_str, lon_letter, negative_letters="W")
         if -90 <= lat <= 90 and -180 <= lon <= 180:
             fields["latitude"] = ExtractedField(lat, "high", "decimal-degree match in text", "regex")
             fields["longitude"] = ExtractedField(lon, "high", "decimal-degree match in text", "regex")
@@ -335,9 +390,10 @@ def render_page_to_image(pdf_path: Path, page_number: int, output_path: Path, dp
     """
     import fitz
     doc = fitz.open(pdf_path)
-    if not (0 <= page_number < doc.page_count):
+    page_count = doc.page_count
+    if not (0 <= page_number < page_count):
         doc.close()
-        raise ValueError(f"page_number {page_number} out of range (0-{doc.page_count - 1})")
+        raise ValueError(f"page_number {page_number} out of range (0-{page_count - 1})")
     page = doc[page_number]
     pix = page.get_pixmap(dpi=dpi)
     output_path.parent.mkdir(parents=True, exist_ok=True)

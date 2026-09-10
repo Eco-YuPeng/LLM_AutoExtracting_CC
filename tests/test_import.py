@@ -59,6 +59,46 @@ def test_locate_sections_finds_methods_heading():
     assert "site details" in sections["methods"]
 
 
+def test_locate_sections_handles_bold_numbered_same_level_subsections():
+    """Regression test: a real paper (Franco et al. 2021, Agronomy
+    Journal) renders headings as '## **2 MATERIALS AND METHODS**' with
+    subsections '## **2.1 Site descriptions**' at the SAME markdown
+    heading depth as the parent section. The naive "stop at next ##"
+    approach cut the Methods span off almost immediately; it must
+    instead run until the next section's own heading (Results)."""
+    from src.literature_extractor import locate_sections
+
+    md = (
+        "## **2 MATERIALS AND METHODS** \n\n"
+        "## **2.1 Site descriptions** \n\n"
+        "This study was conducted near Mandan, ND (46.81˚ N, −100.92˚ W).\n\n"
+        "## **2.2 Experimental design** \n\n"
+        "More methods text here.\n\n"
+        "## **3 RESULTS** \n\n"
+        "## **3.1 Precipitation** \n\n"
+        "Results text here.\n"
+    )
+    sections = locate_sections(md)
+    assert sections["fallback_used"] is None
+    assert "46.81" in sections["methods"]
+    assert "Experimental design" in sections["methods"] or "More methods text" in sections["methods"]
+    assert "RESULTS" not in sections["methods"]
+    assert "Precipitation" in sections["results"]
+
+
+def test_extract_deterministic_handles_unicode_degree_and_minus_signs():
+    """Regression test: PDF text layers commonly use U+02DA (˚) instead
+    of U+00B0 (°) for degree signs, and U+2212 (−) instead of ASCII '-'
+    for negative coordinates — both must parse correctly."""
+    from src.literature_extractor import extract_deterministic, load_data_catalog
+
+    catalog = load_data_catalog()
+    text = "This study was conducted near Mandan, ND (46.81˚ N, −100.92˚ W)."
+    fields = extract_deterministic(text, catalog)
+    assert fields["latitude"].value == 46.81
+    assert fields["longitude"].value == -100.92
+
+
 def test_compute_response_ratios():
     from src.literature_extractor import compute_response_ratios, ExtractedField
     import math
