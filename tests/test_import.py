@@ -1,47 +1,72 @@
-"""Smoke tests — verify the core library imports cleanly and public API is intact."""
+"""Smoke tests — verify the core library imports cleanly and the public API is intact."""
 
 import sys
 from pathlib import Path
 
-# Ensure repo root is on sys.path so `src` is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-def test_import_geospatial_harmonizer():
-    from src.geospatial_harmonizer import (
-        DatasetSpec,
-        ExampleWorkflow,
-        VizMetadata,
-        run_harmonization_example,
-        harmonize_raster,
-        rasterize_vector_to_grid,
-        create_visualization,
-        create_interactive_visualization,
-        build_grid_spec,
-        download_file,
+def test_import_literature_extractor():
+    from src.literature_extractor import (
+        PaperSpec,
+        ExtractionWorkflow,
+        ExtractedField,
+        load_schema,
+        load_data_catalog,
+        check_pdf_readable,
+        pdf_to_markdown,
+        locate_sections,
+        extract_deterministic,
+        classify_response_type,
+        extract_narrow_llm,
+        extract_vision_llm,
+        normalize_fields,
+        compute_response_ratios,
+        validate_with_apis,
+        assemble_row,
+        run_extraction,
     )
 
 
-def test_datasetspec_defaults():
-    from src.geospatial_harmonizer import DatasetSpec
+def test_schema_loads_and_is_well_formed():
+    from src.literature_extractor import load_schema
 
-    ds = DatasetSpec(name="test", url="http://example.com/data.tif", data_type="raster")
-    assert ds.resampling_method is None
-    assert ds.rasterize is False
-    assert ds.burn_value == 1
-    assert ds.data_type == "raster"
+    schema = load_schema()
+    assert "fields" in schema
+    for category, field_list in schema["fields"].items():
+        for field_def in field_list:
+            assert "name" in field_def, f"field in {category} missing 'name'"
+            assert "status" in field_def, f"{field_def.get('name')} missing 'status'"
 
 
-def test_datasetspec_vector():
-    from src.geospatial_harmonizer import DatasetSpec
+def test_data_catalog_loads():
+    from src.literature_extractor import load_data_catalog
 
-    ds = DatasetSpec(
-        name="boundaries",
-        url="http://example.com/bounds.zip",
-        data_type="vector",
-        rasterize=True,
-        burn_value=5,
-    )
-    assert ds.data_type == "vector"
-    assert ds.rasterize is True
-    assert ds.burn_value == 5
+    catalog = load_data_catalog()
+    assert "species_gazetteer" in catalog
+    assert len(catalog["species_gazetteer"]) > 0
+    for entry in catalog["species_gazetteer"]:
+        assert "scientific_name" in entry
+        assert "cc_category" in entry
+
+
+def test_locate_sections_finds_methods_heading():
+    from src.literature_extractor import locate_sections
+
+    md = "# Intro\ntext\n## Materials and Methods\nsite details here\n## Results\nvalues here"
+    sections = locate_sections(md)
+    assert sections["fallback_used"] is None
+    assert "site details" in sections["methods"]
+
+
+def test_compute_response_ratios():
+    from src.literature_extractor import compute_response_ratios, ExtractedField
+    import math
+
+    row = {
+        "yield_cc_mean": ExtractedField(5.5, "high", "test", "narrow_llm"),
+        "yield_control_mean": ExtractedField(5.0, "high", "test", "narrow_llm"),
+    }
+    result = compute_response_ratios(row)
+    assert "yield_ln_response_ratio" in result
+    assert abs(result["yield_ln_response_ratio"].value - math.log(5.5 / 5.0)) < 1e-9

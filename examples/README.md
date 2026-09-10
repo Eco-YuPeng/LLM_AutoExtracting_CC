@@ -1,16 +1,15 @@
 # Examples
 
-Each subdirectory is a self-contained reference example. It contains the script that generated the analysis and the outputs it produced.
+Each subdirectory is a self-contained reference example: the target
+output shape for a real extraction run, using genuinely verified data
+where possible.
 
 ```
 examples/
-  colorado_fire_risk/
-    colorado_harmonization.py   # the script
-    README.md                   # what this example does
-    output/                     # generated outputs (data gitignored, viz tracked)
-      harmonized_*.tif
-      harmonized_visualization.png
-      harmonized_visualization.html
+  book4_reference/
+    README.md                  # what this example shows, and why
+    expected_output.csv        # the target row shape (real, verified fields only)
 ```
 
-These examples are **read-only teaching material**. To start your own analysis, create a new folder in `workflows/` instead.
+These examples are **read-only teaching material**. To start your own
+extraction run, create a new folder in `workflows/` instead.

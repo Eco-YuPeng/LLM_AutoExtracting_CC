@@ -1,120 +1,181 @@
-# Geospatial Harmonization Tasks
+# Cover Crop Literature Extraction Tasks
 
-This document describes the steps needed to harmonize multiple geospatial
-datasets so they can be directly compared or analyzed together.  It is
-tool-agnostic — the same pipeline applies whether you use command-line
-utilities, Python, R, or any other stack.
+This document describes the steps needed to extract standardized data
+from a cover crop research PDF into the schema defined in
+`schema/cover_crop_schema.yml`. It is tool-agnostic — the same pipeline
+applies whether implemented in Python, R, or any other stack.
 
 ---
 
 ## Input
 
-- One or more dataset URLs (raster or vector)
-- A target region of interest (state, county, custom boundary, or bounding box)
-- A target coordinate reference system (CRS)
-- A target spatial resolution
+- A single PDF file (the pipeline does not search for or fetch papers —
+  see AGENTS.md).
+
+## Output
+
+- One or more rows (one per treatment comparison) appended to a table
+  matching `schema/cover_crop_schema.yml`, each field carrying a
+  confidence (`high` / `medium` / `low`) and a one-line source note.
 
 ---
 
-## Task 1: Validate Data Sources
+## Task 1: Verify the PDF Is Readable
 
-Check that every dataset URL is reachable and returns actual geospatial data
-(not an HTML portal page or a login screen).  If a URL fails, stop and report
-which one failed before doing anything else.
-
----
-
-## Task 2: Download Datasets
-
-Download each dataset from its URL.  If a file is a compressed archive (ZIP),
-extract it.  Identify the geospatial file inside each archive — look for
-GeoTIFF, Shapefile, GeoJSON, GeoPackage, or NetCDF files.
+Open the PDF and confirm it has a text layer (not a scanned image with
+no OCR). If it does not, or the file is corrupted, stop and report which
+file failed — do not proceed with any other task for this paper.
 
 ---
 
-## Task 3: Determine the Target Grid
+## Task 2: Convert to Markdown and Identify the Paper
 
-Resolve the region of interest to a bounding box and, when available, an
-actual boundary polygon.
+Convert the PDF to Markdown, preserving heading structure (this narrows
+every later search — do it once, cache the result). Attempt a
+best-effort identification pass on the same pass:
 
-- For US states, counties, or places, look up the boundary from an
-  authoritative source (e.g. Census TIGER boundaries).
-- For international or custom regions, ask the user for a boundary file or
-  a bounding box in the target CRS.
-- Choose an appropriate CRS: geographic (e.g. EPSG:4326) for broad areas,
-  projected (e.g. a UTM zone) for local analysis that needs accurate distances.
-
----
-
-## Task 4: Reproject to a Common CRS
-
-Transform every dataset — both rasters and vectors — into the target
-coordinate reference system so they all share the same spatial reference.
+- Read PDF metadata fields (title, DOI if embedded).
+- Regex-scan the first page for a DOI pattern (`10\.\d{4,9}/\S+`).
+- If neither yields anything, leave `doi` / `article_title` blank. Do
+  not search the web to resolve them — this pipeline is PDF-in only.
 
 ---
 
-## Task 5: Clip to the Region of Interest
+## Task 3: Locate the Methods and Results Sections
 
-Crop all datasets to the target area.
+Scan the Markdown's header structure for section-title variants:
 
-- If a boundary polygon is available, clip to the actual boundary shape
-  (not just the rectangular bounding box).  This avoids including data from
-  neighboring regions.
-- If only a bounding box is available, clip to that rectangle.
+- Methods-like: "Materials and Methods", "Methods", "Materials &
+  Methods", "Study Site", "Experimental Design", with or without
+  numbering ("2. Materials and Methods", "2.1 Study Site").
+- Results-like: "Results", "Results and Discussion".
 
----
+Take everything from a matched heading to the next top-level heading as
+that section's span — do not sub-divide further; over-splitting risks
+missing information for near-zero cost savings at this stage.
 
-## Task 6: Resample Rasters to a Common Resolution
-
-Bring all raster datasets to the same pixel size.
-
-- Use **nearest-neighbor** resampling for categorical data (land cover classes,
-  fuel model codes, soil types) — interpolating between class codes produces
-  meaningless values.
-- Use **bilinear** interpolation for continuous data (temperature,
-  precipitation, elevation) — this preserves smooth gradients.
-- If you are unsure which method to use for a dataset, ask the user.
+Fallback order if Methods isn't found: Abstract, then full text (full-
+text matches get a `low` confidence cap — higher false-positive risk,
+e.g. picking up a coordinate cited from a different study).
 
 ---
 
-## Task 7: Handle Vector Data
+## Task 4: Extract Block 1 (Core Plot / Practice Info) — Deterministic Pass
 
-For each vector dataset, decide whether to:
+From the Methods span, using regex and controlled-vocabulary
+(gazetteer) matching only — no LLM call:
 
-- **Keep it as a vector** — reproject and clip to the target area, save as
-  GeoJSON.  Good when you need the original geometry (fire perimeters,
-  administrative boundaries).
-- **Rasterize it to the target grid** — convert to a raster at the target
-  resolution by burning a constant value (e.g. 1 = present, 0 = absent).
-  Good for large point or polygon datasets (building footprints, road
-  networks) that need to align with raster layers.
-
----
-
-## Task 8: Save Harmonized Outputs
-
-Save each harmonized dataset:
-
-- Rasters → GeoTIFF (`.tif`)
-- Vectors → GeoJSON (`.geojson`)
-
-All outputs should share the same CRS, extent, and (for rasters) resolution.
+- Coordinates (latitude/longitude patterns, DMS or decimal).
+- Country (ISO country-name gazetteer).
+- Cover crop species (matched against `data_catalog.yml`'s species
+  list).
+- Tillage (already a clean controlled vocabulary: NT/CT/RT).
+- Any other schema field marked `extraction_method: regex` or
+  `gazetteer`.
 
 ---
 
-## Task 9: Generate Visualization
+## Task 5: Extract Block 1 — Narrow LLM Pass
 
-Create a multi-panel map showing all harmonized layers side by side, saved as
-a PNG image.  This gives a quick visual check that everything aligned
-correctly.
+For the remaining Block 1 fields (marked `extraction_method:
+narrow_llm` in the schema and not already filled by Task 4), make one
+LLM call scoped to the Methods span only. This covers fields like
+planting/termination timing, rotation, fertilization, irrigation,
+tillage detail, soil texture — text that needs interpretation, not
+pattern matching.
 
 ---
 
-## Task 10: Document the Work
+## Task 6: Classify Which Response Variables This Paper Reports
 
-Record what was done so the analysis is reproducible:
+Read the Abstract plus the Results section's headers/table/figure
+captions. Determine which of the Block 2 sub-blocks apply: yield, GHG
+(CO2/N2O/CH4), SOC, nitrogen (and disambiguate which nitrogen metric —
+mineral-N-at-sowing, leaching, or total-N). A paper may report more
+than one. Record the result in `response_types_detected`. This
+determines which Block 2 sub-blocks Tasks 7-8 attempt — do not search
+for yield data in a paper classified as GHG-only.
 
-- The original user request
-- Which datasets were used (URLs)
-- Key decisions made (CRS, resolution, resampling method, rasterize vs. keep vector)
-- Any issues encountered and how they were resolved
+---
+
+## Task 7: Extract Block 2 (Response Data) — Text and Tables
+
+For each sub-block named in Task 6's output, search the Results span
+(text and any parsed tables) for: `{prefix}cc_mean`,
+`{prefix}control_mean`, `{prefix}cc_sd`, `{prefix}control_sd`,
+`{prefix}unit`, `{prefix}n`, and (for multi-year studies) map each
+value to a specific `year` using the same value-cross-referencing logic
+used for the Book4.xlsx year extraction — if a paper reports two years
+of N2O flux, match each numeric value to the year the text or table
+associates it with, rather than assigning the whole range to every row.
+
+---
+
+## Task 8: Extract Block 2 — Figure-Only Values
+
+Only when Task 7 doesn't find a needed value in text/tables AND the
+paper explicitly points to a figure for it (e.g. "as shown in Fig. 3"):
+render that PDF page to an image and read the value with a vision-
+capable model call, scoped to that one image. Cap confidence at
+`medium` unless the figure prints an explicit numeric label. If the
+referenced figure can't be located or rendered, leave the field blank.
+
+---
+
+## Task 9: Normalize
+
+For every field with a `_raw`/`_norm` pair in the schema, produce the
+`_norm` value: rule-based controlled-vocabulary mapping first (e.g.
+"Yes (pre+post)" → `Yes-pre+post`), falling back to a narrow LLM call
+only for text the rule table doesn't cover. Trim/clean simple
+inconsistencies (trailing spaces, case) as part of this pass, not
+during extraction.
+
+---
+
+## Task 10: Compute Response Ratios
+
+Pure computation, no LLM: for every Block 2 sub-block with both a
+`cc_mean` and `control_mean` present, compute the log response ratio
+and its variance using the same response-ratio meta-analysis method
+already in use for the yield block (see schema comments for the
+legacy multi-method variance fields kept for the yield block
+specifically).
+
+---
+
+## Task 11: Validate
+
+- Species names against GBIF / World Flora Online.
+- Coordinates reverse-geocoded and checked against the stated country
+  (GeoNames / Nominatim).
+- Numeric sanity ranges (plausible yield magnitudes, year within a
+  reasonable bound, coordinates within valid lat/lon ranges).
+- Cross-method agreement: where a field was filled by both Task 4
+  (deterministic) and independently touched by Task 5/7 (LLM), flag a
+  mismatch rather than silently picking one value.
+
+These external API calls require open network access and will not
+succeed from a sandboxed environment without it.
+
+---
+
+## Task 12: Assemble the Row and Tag Confidence
+
+Merge every task's output into one row matching the schema exactly.
+Every field gets a confidence (`high` / `medium` / `low`) and a short
+source note explaining the evidence (verbatim quote location, range
+interpreted, or fallback method used). Any field that remains unfilled
+after all tasks stays blank — never fabricate a value.
+
+---
+
+## Task 13: Document the Work
+
+Append an entry to `PROMPT_ACTION_LOG.md`:
+
+- The original user request.
+- Which PDF(s) were processed.
+- Key decisions made (section fallback used, response types classified,
+  any vision-extraction triggered).
+- Any papers or fields flagged for human review, and why.

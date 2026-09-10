@@ -1,36 +1,22 @@
-mkdocs>=1.6
-mkdocs-material>=9.5
+# Core dependencies for cover crop literature extraction
 
-# Geospatial data harmonization
-rasterio>=1.3
-numpy>=1.21
-matplotlib>=3.5
-Pillow>=9.0
-pyproj>=3.4
-shapely>=2.0
-fiona>=1.10
-folium>=0.14
-branca>=0.6
+# PDF handling
+pymupdf>=1.24        # fitz — PDF opening, metadata, page-to-image rendering
+pymupdf4llm>=0.0.5    # PDF -> markdown conversion preserving heading structure
 
-# Spatial analytics (SQL-based, memory-efficient)
-duckdb>=1.0
-
-# System dependency (not a pip package):
-#   apt install gdal-bin   (>= 3.8, ships with Ubuntu 24.04)
-# Provides: ogr2ogr, ogrinfo, gdalwarp, gdal_rasterize, gdal_translate
-
-# Configuration support for examples
+# Config / schema
 pyyaml>=6.0
 
-# STAC client for cloud-native data discovery (Sentinel-2, Landsat, NAIP, etc.)
-pystac-client>=0.7
+# Data output
+pandas>=2.0
+openpyxl>=3.1         # Excel export, if the user wants .xlsx instead of .csv
 
-# Climate / scientific array formats (NetCDF, OPeNDAP, Zarr)
-xarray>=2024.0
-netCDF4>=1.6
-zarr>=2.0
-dask[array]>=2026.3.0
-
-# Testing and catalog sync
-pytest>=7.0
+# External validation APIs (Task 11) — network calls only, no local install needed
 requests>=2.28
+
+# Testing
+pytest>=7.0
+
+# NOTE: LLM calls (classify_response_type, extract_narrow_llm,
+# extract_vision_llm) are stubs in src/literature_extractor.py — add
+# your model provider's SDK here once you wire them (e.g. anthropic>=0.40).

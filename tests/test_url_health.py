@@ -1,14 +1,13 @@
 """
-URL health checks for data_catalog.yml.
+API endpoint health checks for data_catalog.yml's external_apis list.
 
-Sends a lightweight request to each URL to verify reachability.
-NEVER fails the test suite — collects and reports dead URLs as warnings only,
-since URL staleness is outside this repo's control.
+Sends a lightweight request to each base_url to verify reachability.
+NEVER fails the test suite — collects and reports dead endpoints as
+warnings only.
 
 Run separately with: pytest tests/test_url_health.py -v -s
 """
 
-import re
 import sys
 from pathlib import Path
 
@@ -22,66 +21,27 @@ CATALOG = Path(__file__).parent.parent / "data_catalog.yml"
 REQUEST_TIMEOUT = 20  # seconds
 
 
-def load_urls():
-    """Return list of (label, url) tuples from data_catalog.yml.
-    Entries with health_check: skip are excluded.
-
-    Templated entries (url_template + variants) are checked once with the first
-    variant substituted, since all variants share the same host and any per-
-    variant outage would not be a catalog problem.
-    """
+def load_api_base_urls():
+    """Return list of (name, base_url) tuples from data_catalog.yml's
+    external_apis list. Entries without a base_url (endpoint not yet
+    confirmed) are skipped, not failed."""
     with open(CATALOG) as f:
         catalog = yaml.safe_load(f)
-    urls = []
-    for entry in catalog.get("datasets", []):
-        if entry.get("health_check") == "skip":
-            continue
-        if "url_template" in entry and entry.get("variants"):
-            template = entry["url_template"]
-            variants = entry["variants"]
-            placeholder = re.findall(r"\{(\w+)\}", template)[0]
-            sample_url = template.format(**{placeholder: variants[0]})
-            label = f"{entry['name']} ({placeholder}={variants[0]})"
-            urls.append((label, sample_url))
-        else:
-            urls.append((entry["name"], entry["url"]))
-        if entry.get("labels_url"):
-            urls.append((entry["name"] + " (labels)", entry["labels_url"]))
-    return urls
+    return [
+        (entry["name"], entry["base_url"])
+        for entry in catalog.get("external_apis", [])
+        if entry.get("base_url")
+    ]
 
 
 def check_url(url: str) -> tuple[bool, str]:
-    """Return (ok, message).
-    - OPeNDAP (dodsC): request .dds suffix — returns metadata without triggering a download
-    - Everything else: HEAD request
-    """
-    if "dodsC" in url:
-        # Strip any existing suffix and request .dds (dataset descriptor — lightweight metadata)
-        check_url_str = url.split("?")[0].rstrip("/") + ".dds"
-        method = "GET"
-    else:
-        check_url_str = url
-        method = "HEAD"
     try:
-        r = requests.request(
-            method, check_url_str,
-            timeout=REQUEST_TIMEOUT,
-            stream=True,
-            headers={"User-Agent": "Mozilla/5.0"},
-            allow_redirects=True,
-        )
-        # Some APIs (e.g. STAC API roots) reject HEAD with 405. Retry with GET.
-        if r.status_code == 405 and method == "HEAD":
-            r = requests.get(
-                check_url_str,
-                timeout=REQUEST_TIMEOUT,
-                stream=True,
-                headers={"User-Agent": "Mozilla/5.0"},
-                allow_redirects=True,
-            )
-        if r.status_code < 400:
-            return True, f"HTTP {r.status_code}"
-        return False, f"HTTP {r.status_code}"
+        r = requests.head(url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"},
+                           allow_redirects=True)
+        if r.status_code in (405, 501):
+            r = requests.get(url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"},
+                              allow_redirects=True, stream=True)
+        return r.status_code < 400, f"HTTP {r.status_code}"
     except requests.exceptions.Timeout:
         return False, "Timeout"
     except requests.exceptions.ConnectionError as e:
@@ -91,11 +51,14 @@ def check_url(url: str) -> tuple[bool, str]:
 
 
 @pytest.mark.url_health
-def test_all_catalog_urls_reachable():
-    """Check every URL in data_catalog.yml. Report failures but always pass."""
-    urls = load_urls()
+def test_all_catalog_apis_reachable():
+    """Check every base_url in data_catalog.yml. Report failures but always pass.
+    NOTE: this test requires open network access — it will report all
+    endpoints as unreachable inside a sandboxed chat container. That is
+    expected there, not a real failure; see AGENTS.md step 10."""
+    apis = load_api_base_urls()
     failures = []
-    for name, url in urls:
+    for name, url in apis:
         ok, message = check_url(url)
         status = "OK" if ok else "DEAD"
         print(f"  [{status}] {name}: {url}  ({message})")
@@ -103,9 +66,9 @@ def test_all_catalog_urls_reachable():
             failures.append(f"  {name}: {url}  ({message})")
 
     if failures:
-        print(f"\n⚠  {len(failures)} unreachable URL(s) — update data_catalog.yml:\n")
+        print(f"\n⚠  {len(failures)} unreachable endpoint(s) — "
+              f"expected inside a sandboxed container, investigate otherwise:\n")
         for f in failures:
             print(f)
 
-    # Always pass — dead URLs are a maintenance note, not a repo error
-    assert True
+    assert True  # report-only, never fail the suite

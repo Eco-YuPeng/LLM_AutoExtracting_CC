@@ -1,372 +1,211 @@
-# Data Catalog — known-good dataset URLs
+# Data Catalog — cover crop species gazetteer + external validation APIs
 #
-# POLICY: Every URL in this file must pass tests/test_url_health.py.
-# If a URL starts failing the health check, remove the entry — do not add
-# health_check: skip to work around a failure. Only freely accessible URLs
-# (no API key required) belong here.
+# POLICY: species entries are used for deterministic (regex/gazetteer)
+# matching in Task 4 of TASKS.md — never guess a species from partial
+# text; if it's not in this list, extend the list (with a real source)
+# rather than letting an LLM guess a scientific name.
 #
-# Add a new entry each time a workflow uses a URL that successfully downloads
-# and harmonizes AND the URL passes the health check.
-# Run scripts/sync_esiil_catalog.py to discover new candidates from the
-# ESIIL Data Library (https://cu-esiil.github.io/data-library/).
+# API entries are used in Task 11 (validate). Confirm exact
+# request/response shape against the extract-from-pdfs skill's
+# 05_validate_with_apis.py before wiring calls — this file records the
+# service and purpose, not a guaranteed-exact endpoint contract.
 #
-# ── Sections (in order) ────────────────────────────────────────────────────
-#   1. Colorado Fire Risk Example      — datasets used by the worked example
-#   2. ESIIL Data Library              — entries curated from the ESIIL Library
-#   3. Open Data                       — everything else, organized as:
-#        3a. Federal & open direct downloads (CDL, TIGER, Hansen, MS Buildings, ...)
-#        3b. Climate data via STAC      (Microsoft Planetary Computer)
+# ── Sections ────────────────────────────────────────────────────────────
+#   1. Cover crop species gazetteer — seed list, extend as new species
+#      are encountered in real papers (each addition needs a real source)
+#   2. External validation APIs
 #
-# ── Fields (alphabetical) ──────────────────────────────────────────────────
-#   labels_url          — optional: CSV with VALUE, R, G, B, label cols for legend
-#   name                — required: human-readable dataset name
-#   notes               — required: format, resampling, gotchas (1–3 sentences)
-#   source              — required: organization or service name
-#   stac_asset_default  — STAC only: recommended default asset key
-#   stac_collection     — STAC only: collection ID to query
-#   topics              — required: short tag list for grep-based discovery
-#   type                — required: raster | vector
-#   url                 — direct download URL, OPeNDAP endpoint, or STAC API root
-#   url_template        — templated only: URL with {placeholder}; pair with variants
-#   variants            — templated only: list of substitution values
-#
-# ── Canonical topic vocabulary ─────────────────────────────────────────────
-# Use ONLY tags from this list when adding or editing entries. Reusing the
-# established tags (rather than inventing variants like 'wildfire' vs 'fire'
-# or 'land_cover' vs 'land-cover') keeps grep-by-topic reliable. Convention:
-# lowercase, kebab-case, singular preferred. Add a new tag only if no
-# existing one fits — and update this list when you do.
-#
-#   Climate & weather:    climate, weather, reanalysis, observed, projections,
-#                         downscaled, drought, precipitation, temperature, wind,
-#                         water-balance, evapotranspiration, cmip5, cmip6
-#   Fire:                 fire, burned-area, fuels
-#   Vegetation / forest:  vegetation, land-cover, forest, canopy, baseline,
-#                         deforestation, regrowth, change-detection, classification
-#   Hydrology / water:    hydrology, water, watersheds, streams, waterbodies
-#   Agriculture:          agriculture, crops
-#   Boundaries / admin:   boundaries, administrative, states, counties, cities,
-#                         congress, politics, education, census, demographics
-#   Indigenous / justice: indigenous, tribal, justice, redlining, historical
-#   Hazards / health:     hazards, contamination, mining, air-quality, health
-#   Infrastructure:       buildings, infrastructure
-#   Research / monitoring: research-sites, monitoring, ecology
-#   Temporal / scope:     daily, global, conus, north-america
-#
-# ── How to use this file (LLM agents) ──────────────────────────────────────
-#   1. List names:        grep -nE "^  - name:" data_catalog.yml
-#   2. List by topic:     grep -nB6 "topics:.*<keyword>" data_catalog.yml
-#                         (-B6 captures preceding name: / type: / source: / url: lines)
-#   3. Read full entry:   Read offset=<line> limit=12
-#   4. See AGENTS.md "Catalog entry → DatasetSpec" for the YAML→code mapping.
-#
-# ── State FIPS codes (for per-state TIGER URLs) ────────────────────────────
-#   01=AL  02=AK  04=AZ  05=AR  06=CA  08=CO  09=CT  10=DE  11=DC  12=FL
-#   13=GA  15=HI  16=ID  17=IL  18=IN  19=IA  20=KS  21=KY  22=LA  23=ME
-#   24=MD  25=MA  26=MI  27=MN  28=MS  29=MO  30=MT  31=NE  32=NV  33=NH
-#   34=NJ  35=NM  36=NY  37=NC  38=ND  39=OH  40=OK  41=OR  42=PA  44=RI
-#   45=SC  46=SD  47=TN  48=TX  49=UT  50=VT  51=VA  53=WA  54=WV  55=WI
-#   56=WY
-#   Full reference: https://www.census.gov/library/reference/code-lists/ansi.html
+# ══════════════════════════════════════════════════════════════════════
 
-datasets:
+species_gazetteer:
+  # Seed list compiled from a real, published, open-access source:
+  # Garba, Bell & Williams (2022) Agron. Sustain. Dev. 42:34,
+  # Table S3 "Cover crop species and their functional type" — 33
+  # species, verified against the paper directly. cc_category is
+  # derived from family: Fabaceae -> Legume, all others -> Non-legume.
+  # Extend this list as real papers introduce new species — never add
+  # an entry without a source.
 
-  # ── 1. Colorado Fire Risk Example ──────────────────────────────────────────
+  - scientific_name: "Avena sativa"
+    common_names: ["Oats", "Oat"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Brassica juncea"
+    common_names: ["Canola"]
+    family: Brassicaceae
+    cc_category: Non-legume
+  - scientific_name: "Brassica napus"
+    common_names: ["Forage rape"]
+    family: Brassicaceae
+    cc_category: Non-legume
+  - scientific_name: "Brassica rapa"
+    common_names: ["Mustard"]
+    family: Brassicaceae
+    cc_category: Non-legume
+  - scientific_name: "Camelina sativa"
+    common_names: ["Camelina"]
+    family: Brassicaceae
+    cc_category: Non-legume
+  - scientific_name: "Canavalia ensiformis"
+    common_names: ["Jack bean"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Crambe abyssinica"
+    common_names: ["Crambe"]
+    family: Brassicaceae
+    cc_category: Non-legume
+  - scientific_name: "Crotalaria juncea"
+    common_names: ["Crotalaria", "Sunn hemp"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Crotalaria retusa"
+    common_names: ["Crotalaria"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Glycine max"
+    common_names: ["Soybean"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Glycine ussuriensis"
+    common_names: ["Huai bean"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Helianthus annuus"
+    common_names: ["Sunflower"]
+    family: Asteraceae
+    cc_category: Non-legume
+  - scientific_name: "Hordeum vulgare"
+    common_names: ["Barley"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Lablab purpureus"
+    common_names: ["Lablab"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Lathyrus sativus"
+    common_names: ["Chickling vetch"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Lens culinaris"
+    common_names: ["Lentil"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Medicago sativa"
+    common_names: ["Alfalfa"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Mucuna pruriens var cochichinensis"
+    common_names: ["Mucuna"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Mucuna pruriens var nagaland"
+    common_names: ["Mucuna"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Panicum miliaceum"
+    common_names: ["Millet", "Proso millet"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Phaseolus aureas"
+    common_names: ["Green gram"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Phaseolus radiatus"
+    common_names: ["Mungbean"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Pisum sativum"
+    common_names: ["Pea"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Raphanus sativus"
+    common_names: ["Oilseed radish"]
+    family: Brassicaceae
+    cc_category: Non-legume
+  - scientific_name: "Secale cereale"
+    common_names: ["Rye", "Cereal rye"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Setaria italica"
+    common_names: ["Millet", "Foxtail millet"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Sorghum bicolor"
+    common_names: ["Sorghum"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Trifolium pratense"
+    common_names: ["Red Clover"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Triticum aestivum"
+    common_names: ["Wheat"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Triticum secale"
+    common_names: ["Triticale"]
+    family: Poaceae
+    cc_category: Non-legume
+  - scientific_name: "Vicia sativa"
+    common_names: ["Common vetch"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Vicia villosa"
+    common_names: ["Hairy vetch"]
+    family: Fabaceae
+    cc_category: Legume
+  - scientific_name: "Vigna unguiculata"
+    common_names: ["Cowpea"]
+    family: Fabaceae
+    cc_category: Legume
 
-  - name: FBFM40 Fire Behavior Fuel Models 2024
-    type: raster
-    source: Landfire
-    url: https://www.landfire.gov/data-downloads/CONUS_LF2024/LF2024_FBFM40_CONUS.zip
-    labels_url: https://landfire.gov/sites/default/files/CSV/2024/LF2024_FBFM40.csv
-    topics: [fire, fuels, vegetation, land-cover]
+  # Added from the user's own Table_S1_for_myself.xlsx common-name usage
+  # (unambiguous, high-confidence botanical match):
+  - scientific_name: "Lolium multiflorum"
+    common_names: ["Annual Ryegrass", "Italian ryegrass"]
+    family: Poaceae
+    cc_category: Non-legume
+
+  # NOTE: Table_S1_for_myself.xlsx's "CCs Species" column has 130 unique
+  # values — this seed list covers only the ones independently verified
+  # against Garba et al. (2022) plus one unambiguous addition. Extend as
+  # real papers are processed; do not bulk-import the remaining common
+  # names without verifying each scientific-name match against a real
+  # source (e.g. GBIF/WFO lookup, see below).
+
+external_apis:
+  - name: GBIF species match
+    purpose: Validate a scientific name resolves to a real, accepted taxon.
+    base_url: https://api.gbif.org/v1/species/match
     notes: >
-      Categorical raster (Scott & Burgan 40 fuel models). Use resampling_method="nearest".
-      ZIP contains a .clr color map; labels_url CSV provides VALUE, R, G, B, and label
-      columns for both visualization colors and legend names.
+      Query param `name={scientific_name}`. Free, no API key. Confirm
+      exact response field names against extract-from-pdfs skill's
+      05_validate_with_apis.py before wiring.
 
-  - name: MACAv2 Winter Precipitation CCSM4 RCP8.5 2006-2099
-    type: raster
-    source: Northwest Knowledge Network THREDDS
-    url: https://thredds.northwestknowledge.net/thredds/dodsC/agg_macav2metdata_pr_CCSM4_r6i1p1_rcp85_2006_2099_CONUS_monthly.nc
-    topics: [climate, precipitation, projections, cmip5]
+  - name: World Flora Online (WFO)
+    purpose: Cross-check plant taxonomy / accepted name status.
     notes: >
-      OPeNDAP endpoint — use netcdf_variable="precipitation" and netcdf_months=[12,1,2,3]
-      for Dec–Mar winter mean. Ensemble member r6i1p1 is CCSM4-specific; verify for
-      other models via the THREDDS catalog XML.
+      Confirm current API endpoint against
+      extract-from-pdfs skill's 05_validate_with_apis.py — endpoint
+      details not independently re-verified in this pass.
 
-  - name: MTBS Burned Area Boundaries
-    type: vector
-    source: USGS
-    url: https://edcintl.cr.usgs.gov/downloads/sciweb1/shared/MTBS_Fire/data/composite_data/burned_area_extent_shapefile/mtbs_perimeter_data.zip
-    topics: [fire, burned-area, historical]
+  - name: Nominatim (OpenStreetMap) reverse geocoding
+    purpose: Reverse-geocode extracted lat/lon and check the result's
+      country against the country stated in the paper's text.
+    base_url: https://nominatim.openstreetmap.org/reverse
     notes: >
-      Fire perimeter polygons for the contiguous US. Keep as vector (rasterize=False).
-      Clip to your target extent to reduce size before analysis.
+      Query params `lat={lat}&lon={lon}&format=json`. Respect Nominatim's
+      usage policy (rate limit, User-Agent header) if calling directly
+      instead of through GeoNames.
 
-  # Microsoft Building Footprints used by this example are listed under section 3
-  # as the templated "Microsoft Building Footprints — All US States" entry.
-
-  # ── 2. ESIIL Data Library ──────────────────────────────────────────────────
-  # Curated from https://cu-esiil.github.io/data-library/ — every entry below
-  # has a corresponding ESIIL Library page. Run scripts/sync_esiil_catalog.py
-  # to discover additional candidates.
-
-  - name: EPA Air Quality Index by County 2022
-    type: vector
-    source: EPA Air Quality System (AQS)
-    url: https://aqs.epa.gov/aqsweb/airdata/annual_aqi_by_county_2022.zip
-    topics: [air-quality, health, hazards]
+  - name: GeoNames
+    purpose: Alternative reverse geocoding / place-name lookup.
     notes: >
-      Annual AQI summary by county (CSV inside ZIP). Tabular data — join to
-      county boundaries for spatial analysis. From ESIIL Data Library hazards/Air_data.
+      Requires a free registered username. Confirm current API endpoint
+      against extract-from-pdfs skill's 05_validate_with_apis.py.
 
-  - name: National Land Cover Database (NLCD) — Annual CONUS
-    type: raster
-    source: MRLC / USGS
-    url_template: https://www.mrlc.gov/downloads/sciweb1/shared/mrlc/data-bundles/Annual_NLCD_LndCov_{year}_CU_C1V1.zip
-    variants: [2024, 2023, 2022, 2021, 2020, 2016, 2011, 2006, 2001]
-    topics: [land-cover, vegetation, classification]
-    notes: >
-      Categorical land cover raster for CONUS. Use resampling_method="nearest".
-      Annual products exist for 2020–2024; pre-2020 vintages are at 5-year-ish
-      intervals (2016, 2011, 2006, 2001). Substitute {year} from variants list.
-      Large download — clip to target extent. From ESIIL Data Library maka-sitomniya/NLCD.
-
-  - name: EPA Uranium Mine Locations
-    type: vector
-    source: EPA
-    url: https://www.epa.gov/sites/default/files/2015-03/uld-ii_gis.zip
-    topics: [hazards, contamination, mining]
-    notes: Point/polygon locations of uranium mines in the US. From ESIIL Data Library hazards/Uranium_mines.
-
-  - name: USGS Watershed Boundary Dataset (WBD) — National
-    type: vector
-    source: USGS / USDA
-    url: https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/WBD/National/GDB/WBD_National_GDB.zip
-    topics: [hydrology, watersheds, boundaries]
-    notes: >
-      National hydrologic unit boundaries (HUC2–HUC12). Very large download (~2 GB).
-      Clip to target extent. From ESIIL Data Library maka-sitomniya/watershed_boundaries.
-
-  - name: NEON Field Site Metadata
-    type: vector
-    source: NEON / NSF
-    url: https://www.neonscience.org/sites/default/files/NEON_Field_Site_Metadata_20230309.csv
-    topics: [research-sites, ecology, monitoring]
-    notes: >
-      CSV of NEON site locations and attributes. Tabular — load with pandas and
-      convert to GeoDataFrame using lat/lon columns. From ESIIL Data Library harmonization/neon_and_lter.
-
-  - name: Census TIGER American Indian / Alaska Native / Native Hawaiian Areas (AIANNH) 2025
-    type: vector
-    source: US Census Bureau
-    url: https://www2.census.gov/geo/tiger/TIGER2025/AIANNH/tl_2025_us_aiannh.zip
-    topics: [boundaries, tribal, indigenous, demographics]
-    notes: >
-      Federally recognized tribal area boundaries. Shapefile inside ZIP. EPSG:4269 (NAD83).
-      From ESIIL Data Library indian_country/aiannh.
-
-  - name: National Atlas of Indian Lands
-    type: vector
-    source: USGS National Atlas
-    url: https://prd-tnm.s3.amazonaws.com/StagedProducts/Small-scale/data/Boundaries/indlanp010g.shp_nt00968.tar.gz
-    topics: [boundaries, tribal, indigenous, historical]
-    notes: >
-      Shapefile of Indian lands boundaries (.tar.gz archive). From ESIIL Data Library
-      indian_country/national_atlas_of_indian_lands.
-
-  - name: HOLC Redlining — National (2020 Census Tracts)
-    type: vector
-    source: American Panorama / Mapping Inequality
-    url: https://raw.githubusercontent.com/americanpanorama/Census_HOLC_Research/main/2020_Census_Tracts/Tracts_2020_HOLC.geojson
-    topics: [justice, demographics, historical, redlining]
-    notes: >
-      HOLC neighborhood grades joined to 2020 census tracts. GeoJSON, keep as vector.
-      From ESIIL Data Library justice/redlining.
-
-
-  # ── 3. Open Data ───────────────────────────────────────────────────────────
-  # Other open and publicly available datasets. Organized into two subsections
-  # by access pattern: direct downloads (3a) and STAC API catalogs (3b).
-
-  # ── 3a. Federal & open direct downloads ────────────────────────────────────
-
-  - name: USDA Cropland Data Layer (CDL) 2025
-    type: raster
-    source: USDA NASS
-    url: https://www.nass.usda.gov/Research_and_Science/Cropland/Release/datasets/2025_30m_cdls.zip
-    topics: [agriculture, land-cover, crops, classification]
-    notes: >
-      National 30-meter annual crop-type raster for CONUS. Categorical — use
-      resampling_method="nearest". Color/label legend (.clr and .xml) ships inside
-      the ZIP. Replace year in URL for other vintages (2008–present).
-
-  - name: USGS 3D Hydrography Program (3DHP) — National CONUS GeoPackage (FY26)
-    type: vector
-    source: USGS / The National Map
-    url: https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/3DHP/Annual/GPKG/3dhp_all_GPKG_FY26_CONUS_20260112/3dhp_all_CONUS_20260112_GPKG.zip
-    topics: [hydrology, water, streams, waterbodies]
-    notes: >
-      Successor to NHD/NHDPlus High Resolution. National flowlines, waterbodies,
-      and drainage areas as a GeoPackage inside a ZIP. Annual release dated
-      2026-01-12 (FY26 publish 2026-01-23). Large download — clip to target
-      extent before analysis. Replace the FY/date segments in the URL for newer
-      vintages as they publish.
-
-  - name: Hansen Global Forest Change 2024 — Loss Year (50N 110W tile)
-    type: raster
-    source: Hansen / Google Earth Engine
-    url: https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/Hansen_GFC-2024-v1.12_lossyear_50N_110W.tif
-    topics: [forest, deforestation, vegetation, change-detection, global]
-    notes: >
-      Annual forest loss year raster. Replace tile (e.g. 50N_110W) with your region.
-      Multiple layers available: lossyear, treecover2000, gain, last, first, datamask.
-
-  - name: Hansen Global Forest Change 2024 — Tree Cover 2000 (50N 110W tile)
-    type: raster
-    source: Hansen / Google Earth Engine
-    url: https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/Hansen_GFC-2024-v1.12_treecover2000_50N_110W.tif
-    topics: [forest, vegetation, canopy, baseline, global]
-    notes: Percent tree canopy cover in year 2000. Continuous raster, use resampling_method="bilinear".
-
-  - name: Hansen Global Forest Change 2024 — Gain (50N 110W tile)
-    type: raster
-    source: Hansen / Google Earth Engine
-    url: https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/Hansen_GFC-2024-v1.12_gain_50N_110W.tif
-    topics: [forest, vegetation, regrowth, change-detection, global]
-    notes: Binary forest gain 2000–2012. Use resampling_method="nearest".
-
-  - name: Census TIGER States 2025
-    type: vector
-    source: US Census Bureau
-    url: https://www2.census.gov/geo/tiger/TIGER2025/STATE/tl_2025_us_state.zip
-    topics: [boundaries, administrative, states, census]
-    notes: National state boundary polygons (50 states + DC + territories). Shapefile inside ZIP. EPSG:4269 (NAD83).
-
-  - name: Census TIGER Counties 2025
-    type: vector
-    source: US Census Bureau
-    url: https://www2.census.gov/geo/tiger/TIGER2025/COUNTY/tl_2025_us_county.zip
-    topics: [boundaries, administrative, counties, census]
-    notes: National county and county-equivalent boundaries. Shapefile inside ZIP. EPSG:4269 (NAD83).
-
-  - name: Census TIGER Congressional Districts 2025 (119th Congress)
-    type: vector
-    source: US Census Bureau
-    url: https://www2.census.gov/geo/tiger/TIGER2025/CD/tl_2025_01_cd119.zip
-    topics: [boundaries, administrative, congress, politics, census]
-    notes: >
-      Per-state file — example URL is Alabama (FIPS 01). Replace "01" in the URL with the
-      target state's two-digit FIPS code (see header for full FIPS table). Shapefile inside
-      ZIP. EPSG:4269 (NAD83).
-
-  - name: Census TIGER Places 2025
-    type: vector
-    source: US Census Bureau
-    url: https://www2.census.gov/geo/tiger/TIGER2025/PLACE/tl_2025_01_place.zip
-    topics: [boundaries, administrative, cities, census]
-    notes: >
-      Incorporated places and census designated places. Per-state file — example URL is
-      Alabama (FIPS 01). Replace "01" in the URL with the target state's two-digit FIPS code
-      (see header for full FIPS table). Shapefile inside ZIP. EPSG:4269 (NAD83).
-
-  - name: Census TIGER Unified School Districts 2025
-    type: vector
-    source: US Census Bureau
-    url: https://www2.census.gov/geo/tiger/TIGER2025/UNSD/tl_2025_01_unsd.zip
-    topics: [boundaries, administrative, education, census]
-    notes: >
-      Unified school district boundaries (combined elementary + secondary). Per-state file —
-      example URL is Alabama (FIPS 01). Replace "01" in the URL with the target state's
-      two-digit FIPS code (see header for full FIPS table). Shapefile inside ZIP. EPSG:4269 (NAD83).
-
-  - name: Microsoft Building Footprints — All US States
-    type: vector
-    source: Microsoft
-    url_template: https://minedbuildings.z5.web.core.windows.net/legacy/usbuildings-v2/{state}.geojson.zip
-    variants: [Alabama, Alaska, Arizona, Arkansas, California, Colorado, Connecticut, Delaware, DistrictofColumbia, Florida, Georgia, Hawaii, Idaho, Illinois, Indiana, Iowa, Kansas, Kentucky, Louisiana, Maine, Maryland, Massachusetts, Michigan, Minnesota, Mississippi, Missouri, Montana, Nebraska, Nevada, NewHampshire, NewJersey, NewMexico, NewYork, NorthCarolina, NorthDakota, Ohio, Oklahoma, Oregon, Pennsylvania, RhodeIsland, SouthCarolina, SouthDakota, Tennessee, Texas, Utah, Vermont, Virginia, Washington, WestVirginia, Wisconsin, Wyoming]
-    topics: [buildings, infrastructure]
-    notes: >
-      Per-state GeoJSON building footprints in EPSG:4326. Substitute {state} from
-      variants list — multi-word states use PascalCase, no spaces (e.g. NewYork,
-      NorthCarolina, DistrictofColumbia). File sizes range from ~10 MB (Vermont)
-      to ~3 GB (California, Texas) — clip to target extent before analysis. To
-      rasterize to presence/absence, use rasterize=True, burn_value=1. Source:
-      https://github.com/microsoft/USBuildingFootprints. The Colorado example
-      workflow (examples/colorado_fire_risk/colorado_harmonization.py) uses the
-      Colorado variant as a worked illustration.
-
-  # ── 3b. Climate data via STAC (Microsoft Planetary Computer) ──────────────
-  # Set is_stac=True on DatasetSpec. Required: stac_collection + stac_asset.
-  # Optional: stac_datetime (ISO-8601 range), stac_query (extra filters).
-  # If unsure which asset to pick, use stac_asset_default from the entry.
-
-  - name: ERA5 Hourly Reanalysis (Microsoft Planetary Computer STAC)
-    type: raster
-    source: ECMWF / AWS Public Datasets via Microsoft Planetary Computer
-    url: https://planetarycomputer.microsoft.com/api/stac/v1
-    stac_collection: era5-pds
-    stac_asset_default: air_temperature_at_2_metres
-    topics: [climate, weather, reanalysis, temperature, precipitation, wind, global]
-    notes: >
-      Global hourly atmospheric reanalysis 1979–present, ~31 km. Use is_stac=True.
-      Common stac_asset values: air_temperature_at_2_metres (default),
-      surface_air_pressure, air_pressure_at_mean_sea_level,
-      eastward_wind_at_10_metres, northward_wind_at_10_metres,
-      sea_surface_temperature. Continuous variables → resampling_method="bilinear".
-
-  - name: TerraClimate Monthly Water Balance (Microsoft Planetary Computer STAC)
-    type: raster
-    source: University of Idaho via Microsoft Planetary Computer
-    url: https://planetarycomputer.microsoft.com/api/stac/v1
-    stac_collection: terraclimate
-    stac_asset_default: ppt
-    topics: [climate, water-balance, drought, precipitation, evapotranspiration, global]
-    notes: >
-      Global monthly water-balance variables 1958–2021, ~4 km. Use is_stac=True.
-      Common stac_asset values: ppt (precipitation, default), tmax, tmin, vpd
-      (vapor pressure deficit), pet (potential ET), aet (actual ET), pdsi
-      (Palmer drought index), soil (soil moisture), swe (snow water equivalent).
-      All continuous → bilinear resampling.
-
-  - name: NOAA NClimGrid Monthly US Climate (Microsoft Planetary Computer STAC)
-    type: raster
-    source: NOAA NCEI via Microsoft Planetary Computer
-    url: https://planetarycomputer.microsoft.com/api/stac/v1
-    stac_collection: noaa-nclimgrid-monthly
-    stac_asset_default: tavg
-    topics: [climate, observed, temperature, precipitation, conus]
-    notes: >
-      Monthly gridded US climate 1895–present, ~5 km (CONUS). PRISM-comparable
-      observed-climate baseline. Use is_stac=True. stac_asset values: tavg
-      (mean temp, default), prcp (precipitation), tmax, tmin. Continuous → bilinear.
-
-  - name: Daymet Daily North America (Microsoft Planetary Computer STAC)
-    type: raster
-    source: NASA ORNL DAAC via Microsoft Planetary Computer
-    url: https://planetarycomputer.microsoft.com/api/stac/v1
-    stac_collection: daymet-daily-na
-    stac_asset_default: prcp
-    topics: [climate, observed, daily, precipitation, temperature, north-america]
-    notes: >
-      Daily 1 km gridded climate for North America 1980–2020. Use is_stac=True.
-      Common stac_asset values: prcp (precipitation, default), tmax, tmin, srad
-      (shortwave radiation), vp (vapor pressure), swe (snow water equivalent),
-      dayl (daylength). Continuous → bilinear. Use stac_datetime for date-range
-      filtering.
-
-  - name: NASA NEX-GDDP-CMIP6 Downscaled Climate Projections (Microsoft Planetary Computer STAC)
-    type: raster
-    source: NASA Earth Exchange via Microsoft Planetary Computer
-    url: https://planetarycomputer.microsoft.com/api/stac/v1
-    stac_collection: nasa-nex-gddp-cmip6
-    stac_asset_default: tas
-    topics: [climate, projections, cmip6, downscaled, temperature, precipitation, global]
-    notes: >
-      Bias-corrected statistically downscaled CMIP6 projections 1950–2100,
-      0.25° (~25 km) global. Use is_stac=True. stac_asset values: tas
-      (near-surface temp, default), pr (precipitation), tasmax, tasmin, hurs
-      (rel humidity), huss (specific humidity), rsds (surface solar radiation),
-      rlds (surface longwave). Use stac_query to filter by GCM and SSP scenario,
-      e.g. {"cmip6:model": {"eq": "ACCESS-CM2"}, "cmip6:scenario": {"eq": "ssp585"}}.
-      Continuous → bilinear.
+  # IMPORTANT: none of the above domains are in this chat sandbox's
+  # bash_tool network allowlist. Prototyping calls to these APIs from
+  # inside this container must go through the chat's own web_fetch tool
+  # (one at a time); real batch validation runs need an environment
+  # with open network access (e.g. CyVerse).

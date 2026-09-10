@@ -6,7 +6,7 @@ on:
 
 jobs:
 
-  # ── Core tests — blocks the push on failure ──────────────────────────────────
+  # ── Core tests — blocks the push on failure ────────────────────────────
   test:
     runs-on: ubuntu-latest
     steps:
@@ -17,21 +17,12 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements.txt
 
-      - name: Smoke test — library imports
+      - name: Smoke test — library imports, schema, and pure-code stages
         run: pytest tests/test_import.py -v
 
-      - name: Doc page lint — no placeholder text
-        run: pytest tests/test_doc_pages.py -v
-
-      - name: Harmonization correctness
-        run: pytest tests/test_harmonization.py -v
-
-      - name: MkDocs build
-        run: mkdocs build --strict --clean
-
-  # ── URL health — never blocks the push ───────────────────────────────────────
+  # ── API endpoint health — never blocks the push ────────────────────────
   url-health:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -45,5 +36,5 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml requests pytest
 
-      - name: Check catalog URLs
+      - name: Check external validation API endpoints
         run: pytest tests/test_url_health.py -v -s

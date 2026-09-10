@@ -1,0 +1,811 @@
+# ══════════════════════════════════════════════════════════════════════════
+# Cover Crop Literature Extraction — Standardized Schema
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Source of truth: Table_S1_for_myself.xlsx, sheet "Yield Record"
+#   (1026 rows, 91 articles, user's own working meta-analysis database)
+#
+# ── Two-block architecture (v0.4) ──────────────────────────────────────────
+# One unified wide table, two conceptual blocks of fields:
+#
+#   BLOCK 1 — core plot/practice information (from the Methods section).
+#     Where the cover crop is, when it existed (planting → termination
+#     timeline), what species, what cash/grain crop. Expected to be
+#     filled for nearly every row — this is the identity of the
+#     observation.
+#     Categories: identification, location, cover_crop, grain_crop,
+#     temporal, rotation, tillage, inputs, environment.
+#
+#   BLOCK 2 — ecosystem-service response data (from the Results section,
+#     text/tables or figures). Auxiliary and sparse BY DESIGN: a paper
+#     reports whichever response variables it reports (yield, GHG, SOC,
+#     nitrogen, or some combination) — record whatever exists, leave the
+#     rest blank. A "classify response type" pipeline stage determines
+#     which of these sub-blocks to even attempt for a given paper.
+#     Categories: yield_data, ghg_data, soc_data, nitrogen_data.
+#     Each sub-block follows the same pattern: {prefix}cc_mean /
+#     {prefix}control_mean / {prefix}cc_sd / {prefix}control_sd /
+#     {prefix}unit / {prefix}n, plus a computed ln-response-ratio and
+#     its variance — same response-ratio meta-analysis method already
+#     in use, just generalized beyond yield.
+#
+# This schema supersedes the earlier draft based on Garba et al. (2022)
+# Table S1-S3, which is no longer used as a schema reference.
+#
+# ── Design principle: RAW vs NORM ──────────────────────────────────────────
+# For any field where source papers phrase things inconsistently
+# (typos, synonyms, free text), the pipeline keeps TWO columns:
+#   - the `_raw` field: verbatim as extracted from the paper, low
+#     processing, always filled if the information exists in the text.
+#   - the `_norm` field (source file's "-2" suffix convention): a
+#     controlled-vocabulary value, assigned only after the raw text is
+#     reviewed with a confidence judgment. Filled downstream (by the
+#     classification/verification stage), not during first-pass
+#     extraction.
+# Never collapse the two into one column — normalization is a separate,
+# auditable step.
+#
+# ── Field status values ─────────────────────────────────────────────────
+#   active              — kept, used going forward
+#   dropped             — removed, DO NOT populate
+#   proposed_new        — not in the source file; needs user confirmation
+#   needs_confirmation  — kept for now pending an explicit answer
+#
+# ── Extraction method values ────────────────────────────────────────────
+#   manual_existing     — already populated in the source file
+#   regex               — deterministic pattern match, no LLM
+#   gazetteer           — controlled-vocabulary / lookup-table match, no LLM
+#   narrow_llm          — small-context LLM call on a located text span
+#   vision_llm          — LLM call on a rendered figure/chart image, used
+#                         only when a value exists solely in a figure and
+#                         is not stated in text or a table. CONFIDENCE
+#                         RULE: vision_llm-extracted values are capped at
+#                         "medium" confidence unless the figure prints an
+#                         explicit data label.
+#   computed_downstream — derived by a stats script from other fields in
+#                         this table, never extracted from paper text
+#
+# ══════════════════════════════════════════════════════════════════════════
+
+schema_version: "0.4"
+sheet_name: yield_record
+source_reference: Table_S1_for_myself.xlsx (sheet "Yield Record")
+
+fields:
+
+  # ═══════════════════ BLOCK 1 — core plot / practice info ═══════════════
+
+  # ── Identification ───────────────────────────────────────────────────
+  identification:
+    - name: id
+      source_column: "ID-1"
+      type: integer
+      role: primary_key
+      status: active
+      extraction_method: manual_existing
+      description: Row-level unique identifier.
+
+    - name: data_source
+      source_column: "Data Source"
+      type: string
+      status: active
+      extraction_method: manual_existing
+      description: Which batch/dataset this row originally came from (e.g. "Dataset One", "Dataset Two").
+
+    - name: source_row_id
+      source_column: "ID-2"
+      type: integer
+      status: active
+      extraction_method: manual_existing
+      description: Original row id within its source dataset. Not unique across the whole table.
+
+    - name: article_title
+      source_column: "Article Title"
+      type: string
+      status: active
+      extraction_method: manual_existing
+      description: Full title of the source paper.
+
+    - name: paper_id
+      source_column: "Paper ID"
+      type: integer
+      nullable: true
+      status: active
+      extraction_method: manual_existing
+      description: >
+        Numeric id linking rows to the same article. Sparse in the
+        source file (727/1026 filled) — gap the pipeline should close.
+
+    - name: doi
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: regex
+      description: >
+        Read from PDF metadata or regex-matched on the first page (no
+        external search/resolution — pipeline is PDF-in, not
+        citation-in). NEEDS CONFIRMATION: does a separate article-level
+        table already exist, keyed by paper_id, holding DOI/citation?
+
+    - name: response_types_detected
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: >
+        Output of the "classify response type" pipeline stage. Comma-
+        separated list of which Block 2 sub-blocks this row's source
+        paper reports (e.g. "yield,ghg_n2o", "soc", "yield,soil_water").
+        Determines which Block 2 sub-blocks are even attempted for
+        extraction on this paper.
+
+  # ── Location ─────────────────────────────────────────────────────────
+  location:
+    - name: latitude
+      source_column: "Y_Latitutde"
+      type: float
+      status: active
+      extraction_method: regex
+      description: Decimal degrees. Renamed from source (typo "Latitutde" fixed).
+
+    - name: longitude
+      source_column: "X_Longitude"
+      type: float
+      status: active
+      extraction_method: regex
+      description: Decimal degrees. Renamed from source.
+
+    - name: country
+      source_column: "Country"
+      type: string
+      status: active
+      extraction_method: gazetteer
+      description: Validate against ISO country list at the verify stage.
+
+    - name: location
+      source_column: "Location"
+      type: string
+      status: active
+      extraction_method: narrow_llm
+      description: Site, city, or station name as given in the paper.
+
+  # ── Cover Crop ───────────────────────────────────────────────────────
+  cover_crop:
+    - name: cc_species
+      source_column: "CCs Species"
+      type: string
+      status: active
+      extraction_method: gazetteer
+      description: Common name as given in the paper (e.g. "Guinea grass", "Millet").
+
+    - name: cc_species_scientific
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: gazetteer
+      description: >
+        NOT in the source file. Proposed addition: Latin binomial,
+        matched against a species gazetteer and validated (WFO/GBIF).
+        Needs confirmation.
+
+    - name: cc_type
+      source_column: "CCs Type"
+      type: string
+      status: active
+      extraction_method: gazetteer
+      controlled_vocabulary: ["Single Species", "Double Species", "Mixture", "Rotation"]
+      description: Already a clean controlled vocabulary in the source file.
+
+    - name: cc_category
+      source_column: "CCs Famaily"
+      type: string
+      status: active
+      extraction_method: gazetteer
+      controlled_vocabulary: ["Legume", "Non-legume", "Mixture", "Rotation"]
+      description: Functional category (legume vs non-legume), not taxonomic family.
+
+    - name: cc_family_taxonomic
+      source_column: "Unnamed: 12"
+      type: string
+      nullable: true
+      status: needs_confirmation
+      extraction_method: gazetteer
+      note: >
+        Sparse in source (62/1026 filled), e.g. "Grass", "Brassicaceae".
+        Keep, drop, or fold into cc_species_scientific lookup?
+
+  # ── Cash / Grain Crop ────────────────────────────────────────────────
+  grain_crop:
+    - name: grain_crop_raw
+      source_column: "Grain Crop"
+      type: string
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (raw/norm pattern — see header).
+
+    - name: grain_crop_norm
+      type: string
+      status: active
+      extraction_method: computed_downstream
+      controlled_vocabulary: ["Rice", "Corn", "Soybean", "Barley", "Wheat", "Sorghum"]
+      description: Trimmed/normalized version of grain_crop_raw.
+
+  # ── Temporal ─────────────────────────────────────────────────────────
+  temporal:
+    - name: ccs_year_duration
+      source_column: "CCsYear"
+      type: integer
+      status: active
+      extraction_method: narrow_llm
+      description: >
+        Cumulative number of years the cover crop has been used on
+        this plot at the time of this measurement (NOT calendar year).
+        E.g. 1 = first year of cover cropping at this site, 5 = fifth
+        consecutive year.
+
+    - name: year
+      source_column: "Year"
+      type: integer
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: >
+        The actual calendar year the measurement was taken. Very
+        sparse in the source file (299/1026 filled) — PRIMARY TARGET
+        FIELD for the extraction pipeline, same confidence/source
+        tracking approach as the Book4.xlsx year-extraction work.
+
+    - name: cc_planting_time_raw
+      source_column: "CCs Planting Time"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Free text as given (e.g. "V4 growth stage", "Post-Main Crop").
+
+    - name: cc_terminating_time_raw
+      source_column: "CCs terminating time"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Free text as given (e.g. "17 DBP" = days before planting).
+
+  # ── Rotation ─────────────────────────────────────────────────────────
+  rotation:
+    - name: cc_rotation_raw
+      source_column: "CC Rotation"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (e.g. "Rye-Camelina Rotation").
+
+    - name: cc_rotation_norm
+      type: string
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      description: Normalized version of cc_rotation_raw.
+
+    - name: grain_crop_rotation_raw
+      source_column: "Grain Crop Rotation"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (e.g. "corn-soybean rotation").
+
+    - name: grain_crop_rotation_norm
+      type: string
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      description: Normalized version of grain_crop_rotation_raw.
+
+  # ── Tillage ──────────────────────────────────────────────────────────
+  tillage:
+    - name: tillage
+      source_column: "Tillage"
+      type: string
+      status: active
+      extraction_method: gazetteer
+      controlled_vocabulary: ["NT", "CT", "RT", "Null"]
+      description: Already a clean controlled vocabulary (no-till / conventional / reduced).
+
+    - name: tillage_type_raw
+      source_column: "Tillage Type"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Free text detail (e.g. "chisel plow"). Sparse (100/1026).
+
+    - name: tillage_type_norm
+      type: string
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      description: Normalized version of tillage_type_raw.
+
+  # ── Fertilization / Chemical Inputs ─────────────────────────────────
+  inputs:
+    - name: cc_n_rate_kg_ha
+      source_column: "CCs N Rate (kg/ha)"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: regex
+      description: N fertilizer rate applied to the cover crop itself. Sparse (41/1026).
+
+    - name: fertilize_raw
+      source_column: "Fertilize or not"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (source mixes "Yes"/"No"/0).
+
+    - name: fertilize_norm
+      source_column: "Fertilize-2"
+      type: string
+      status: active
+      extraction_method: computed_downstream
+      controlled_vocabulary: ["Yes", "No"]
+      description: Normalized Yes/No, filled by the normalization pass.
+
+    - name: grain_crop_n_rate_raw
+      source_column: "Grain Crop N Rate (kg/ha)"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (source mixes numbers and "Null").
+
+    - name: grain_crop_n_rate_norm
+      source_column: "Grain Crop N Rate-2"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      description: Numeric kg/ha, filled by the normalization pass.
+
+    - name: herbicide_raw
+      source_column: "Herbicide"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (e.g. "Yes (pre+post)", "Null").
+
+    - name: herbicide_norm
+      type: string
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      controlled_vocabulary: ["Yes-pre", "Yes-post", "Yes-pre+post", "No", "Unknown"]
+      description: Normalized version of herbicide_raw.
+
+    - name: irrigation_raw
+      source_column: "Irrigation"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (source has "Null"/"No"/"Yes"/"Rainfall"/"Irrrigated" typo).
+
+    - name: irrigation_norm
+      type: string
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      controlled_vocabulary: ["Rainfed", "Irrigated", "Unknown"]
+      description: Normalized version of irrigation_raw.
+
+  # ── Soil / Environmental ────────────────────────────────────────────
+  environment:
+    - name: soil_texture_raw
+      source_column: "SoilTexture"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Verbatim as extracted (e.g. "silty clay & sandy clay loam").
+
+    - name: soil_texture_norm
+      type: string
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      description: Normalized to a standard USDA soil-texture-triangle class.
+
+    - name: aridity_index
+      source_column: "Arid_Condition"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: computed_downstream
+      description: >
+        Renamed from "Arid_Condition" for clarity — the aridity index
+        (MAP/PET) in use. The source file's separate empty "Arid_Index"
+        column is dropped (see arid_index_unused below).
+
+    - name: arid_index_unused
+      source_column: "Arid_Index"
+      type: float
+      status: dropped
+      note: "Entirely empty (0/1026 filled) in the source file. Not used."
+
+    - name: annual_precipitation_mm
+      source_column: "Annual Precipitation mm/year"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: gazetteer
+      description: Long-term mean annual precipitation (MAP) for the site.
+
+    - name: annual_temperature_c
+      source_column: "Annual Temperature  °C "
+      type: float
+      nullable: true
+      status: active
+      extraction_method: gazetteer
+      description: Long-term mean annual temperature (MAT) for the site.
+
+  # ── Notes ────────────────────────────────────────────────────────────
+  notes:
+    - name: notes
+      source_column: "Notes"
+      type: string
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Free-text annotations.
+
+  # ═══════════════════ BLOCK 2 — ecosystem-service response data ═════════
+  # Sparse by design. Only attempted for the sub-blocks named in
+  # response_types_detected. Each sub-block: {prefix}cc_mean /
+  # control_mean / cc_sd / control_sd / unit / n, plus a computed
+  # ln-response-ratio and variance (same method as yield, generalized).
+
+  # ── Yield ────────────────────────────────────────────────────────────
+  yield_data:
+    - name: yield_n
+      source_column: "N (Sample Size)"
+      type: integer
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: >
+        Renamed from n_cc for consistency with the other Block 2
+        sub-blocks now that a row may report several response types,
+        each potentially with its own sample size.
+
+    - name: n_control
+      source_column: "N_1 (Sample Size)"
+      type: integer
+      status: dropped
+      note: "Was constant (always 3) — leftover placeholder from prior meta-analysis pass. Do not repopulate."
+
+    - name: yield_cc_mean
+      source_column: "E_CCs"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Mean yield under the cover crop treatment.
+
+    - name: yield_cc_sd_uniformed
+      source_column: "E_SD (uniformed)"
+      type: float
+      status: dropped
+      note: "Was constant (always 0.5) — imputed placeholder from prior meta-analysis pass. Do not repopulate."
+
+    - name: yield_cc_sd
+      source_column: "E_SD (all Ave)"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Real (or CV-average-imputed) SD for the cover crop treatment mean.
+
+    - name: yield_control_mean
+      source_column: "C_NCCs"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Mean yield under the no-cover-crop (fallow/control) treatment.
+
+    - name: yield_control_sd_uniformed
+      source_column: "C_SD (uniformed)"
+      type: float
+      status: dropped
+      note: "Also constant (0.5) — dropped alongside its E_SD twin, confirmed."
+
+    - name: yield_control_sd
+      source_column: "C_SD (all Ave)"
+      type: float
+      nullable: true
+      status: active
+      extraction_method: narrow_llm
+      description: Real (or CV-average-imputed) SD for the control treatment mean.
+
+    - name: yield_unit
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Unit of yield_cc_mean/yield_control_mean (e.g. "t/ha", "kg/ha"). Not explicit in the source file — proposed addition for cross-paper comparability.
+
+    - name: yield_ln_response_ratio
+      source_column: "lnR"
+      type: float
+      status: active
+      extraction_method: computed_downstream
+      description: "ln(yield_cc_mean / yield_control_mean). Computed, never extracted."
+
+    - name: yield_var_lnr_uniformed
+      source_column: "Var_lnR_(uniformed)"
+      type: float
+      status: active
+      extraction_method: computed_downstream
+      description: Legacy variant from the source file's SD-imputation history. Computed.
+
+    - name: yield_var_lnr_harmonic_n
+      source_column: "Var_lnR_[Nc*Ne/(Nc+Ne)]"
+      type: float
+      status: active
+      extraction_method: computed_downstream
+      description: Sample-size harmonic-mean term used in the variance formula. Computed.
+
+    - name: yield_var_lnr_all_ave
+      source_column: "Var_lnR_(all Ave)"
+      type: float
+      status: active
+      extraction_method: computed_downstream
+      description: Legacy variant from the source file's SD-imputation history. Computed.
+
+  # ── GHG (CO2 / N2O / CH4) ────────────────────────────────────────────
+  ghg_data:
+    - name: ghg_co2_cc_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Mean CO2 flux/emission under the cover crop treatment.
+    - name: ghg_co2_control_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Mean CO2 flux/emission under the control (fallow) treatment.
+    - name: ghg_co2_cc_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_co2_control_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_co2_unit
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: e.g. "kg CO2-C ha-1", "mg CO2 m-2 h-1".
+    - name: ghg_co2_n
+      type: integer
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_co2_ln_response_ratio
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+    - name: ghg_co2_var_lnr
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+
+    - name: ghg_n2o_cc_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Mean N2O flux/emission under the cover crop treatment.
+    - name: ghg_n2o_control_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_n2o_cc_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_n2o_control_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_n2o_unit
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_n2o_n
+      type: integer
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_n2o_ln_response_ratio
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+    - name: ghg_n2o_var_lnr
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+
+    - name: ghg_ch4_cc_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Mean CH4 flux/emission under the cover crop treatment.
+    - name: ghg_ch4_control_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_ch4_cc_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_ch4_control_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_ch4_unit
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_ch4_n
+      type: integer
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: ghg_ch4_ln_response_ratio
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+    - name: ghg_ch4_var_lnr
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+
+  # ── SOC (Soil Organic Carbon) ────────────────────────────────────────
+  soc_data:
+    - name: soc_cc_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Mean SOC under the cover crop treatment.
+    - name: soc_control_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: soc_cc_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: soc_control_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: soc_unit
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: e.g. "g/kg", "Mg C ha-1".
+    - name: soc_depth_cm
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Soil sampling depth (e.g. "0-15", "0-30") — matters for cross-study comparability, per the same logic Garba et al. flagged for soil sampling depth.
+    - name: soc_n
+      type: integer
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: soc_ln_response_ratio
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+    - name: soc_var_lnr
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+
+  # ── Nitrogen (soil mineral N, leaching N, or other N metrics) ───────
+  nitrogen_data:
+    - name: nitrogen_type
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      controlled_vocabulary: ["mineral-N-at-sowing", "leaching", "total-N", "other"]
+      description: >
+        Disambiguates which nitrogen metric this row holds — "nitrogen"
+        is not one comparable quantity across papers (soil mineral N
+        at cash crop sowing vs N leaching loss vs total soil N are
+        different measures and must not be mixed in one column
+        undifferentiated).
+    - name: nitrogen_cc_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Mean value under the cover crop treatment, for whichever nitrogen_type this row records.
+    - name: nitrogen_control_mean
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: nitrogen_cc_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: nitrogen_control_sd
+      type: float
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: nitrogen_unit
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: e.g. "kg N ha-1", "mg N kg-1 soil".
+    - name: nitrogen_depth_cm
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: Soil sampling depth, relevant when nitrogen_type is mineral-N-at-sowing or total-N.
+    - name: nitrogen_n
+      type: integer
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+    - name: nitrogen_ln_response_ratio
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+    - name: nitrogen_var_lnr
+      type: float
+      status: proposed_new
+      extraction_method: computed_downstream
+
+# ══════════════════════════════════════════════════════════════════════════
+# Open items pending user confirmation
+# ══════════════════════════════════════════════════════════════════════════
+open_questions:
+  - "cc_family_taxonomic (Unnamed: 12, sparse): keep as its own field, drop, or fold into cc_species_scientific lookup?"
+  - "doi field: does a separate article-level table already exist (keyed by paper_id) holding DOI/citation, or should this row-level table carry doi directly?"
+  - "cc_species_scientific: confirm whether to add this proposed field (Latin binomial, WFO/GBIF-validated)."
+  - "All of ghg_data / soc_data / nitrogen_data / yield_unit / response_types_detected are proposed_new — none exist in the source file. Confirm the field names and units before the extraction pipeline targets them."
+  - "Beyond yield/GHG/SOC/nitrogen, should the schema anticipate other ecosystem-service types seen in the literature (e.g. soil water content, weed suppression, disease) as future wide-table sub-blocks, or add those only when a paper actually needs one?"
