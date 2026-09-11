@@ -1,0 +1,2484 @@
+From 0aee0e822e5bd3323719f71f3c93b8599cecdb58 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 11 Sep 2026 17:32:40 +0000
+Subject: [PATCH] Add multi-site row splitting, CC year/duration fields, and
+ stage-4 geolocation scaffold
+
+- enumerate_experimental_units() can now vary location/tillage/fertilize/
+  herbicide/irrigation/soil/coordinates per unit (SITE_VARIABLE_FIELDS),
+  so a paper with physically distinct sites under different management
+  produces one row per site instead of blending their practices together
+- Add cc_years_practiced (per-unit list of calendar years CC was
+  practiced) and computed cc_duration_years (count of distinct years)
+- Fix assemble_row() clobbering paper_id back to None even when
+  PaperSpec.paper_id / --paper-id was set (paper_id is a schema field but
+  never comes from all_fields)
+- Add src/geolocation.py: point -> polygon resolution for the ground-
+  truth workflow's Stage 4 (station registry match -> USDA CSB
+  point-in-polygon -> tier D manual-NAIP-review queue), pure
+  shapely/plain-dict matching logic with geopandas/fiona only at the
+  station registry / CSB gdb loading boundary
+- Add missing tests/test_pipeline.py, src/llm_client.py, and
+  workflows/run_extraction.py from prior uncommitted work, plus new
+  tests/test_geolocation.py (9 tests) and additional test_pipeline.py
+  coverage for the site-splitting and cc_duration changes (39 tests total)
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013MnfbuaTyFx97zerx93SFH
+---
+ AGENTS.md                    |  87 +++-
+ requirements.txt             |  15 +-
+ schema/cover_crop_schema.yml | 169 ++++----
+ src/geolocation.py           | 298 ++++++++++++++
+ src/literature_extractor.py  | 765 ++++++++++++++++++++++++++++-------
+ src/llm_client.py            | 270 +++++++++++++
+ tests/test_geolocation.py    | 125 ++++++
+ tests/test_pipeline.py       | 269 ++++++++++++
+ workflows/run_extraction.py  | 126 ++++++
+ 9 files changed, 1845 insertions(+), 279 deletions(-)
+ create mode 100644 src/geolocation.py
+ create mode 100644 src/llm_client.py
+ create mode 100644 tests/test_geolocation.py
+ create mode 100644 tests/test_pipeline.py
+ create mode 100644 workflows/run_extraction.py
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 5471e35..92728ef 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -30,6 +30,18 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
+ 
+ ---
+ 
++## Who does the judging
++
++The judgment steps (5, 6a, 6b, 7) are REAL model calls made by the
++functions in `src/literature_extractor.py` through `src/llm_client.py`
++(OpenAI-compatible endpoint; on CyVerse this is the AI Verde gateway with
++a Claude-series model, configured by `OPENAI_API_KEY`, `LLM_API_BASE`,
++`LLM_MODEL`). A coding assistant driving this repo (Roo Code, Claude
++Code, …) runs `workflows/run_extraction.py` and reads its output; it
++must NOT read the PDF itself and type values into the table. That keeps
++every extracted value reproducible, logged (model, tokens, evidence
++quote) and re-runnable by someone else.
++
+ ## Core Steps
+ 
+ 1. **Check the PDF is readable** — `python scripts/check_pdf.py <path>`. If it
+@@ -56,24 +68,41 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
+    `extraction_method: regex` or `gazetteer`. Do not re-ask the LLM for a
+    field this step already filled.
+ 5. **Classify response type** — `classify_response_type()`. One cheap LLM
+-   call reading the Abstract + Results headers/captions. Output populates
+-   `response_types_detected` (e.g. `"yield,ghg_n2o"`) and determines which
+-   Block 2 sub-blocks (`yield_data`, `ghg_data`, `soc_data`,
+-   `nitrogen_data`) to even attempt. A paper can hit more than one
+-   sub-block — do not assume exclusivity.
+-6. **Narrow LLM extraction** — `extract_narrow_llm()`. One consolidated
+-   call per paper, scoped ONLY to the section text located in step 3 —
+-   never the full paper. Covers every field with `extraction_method:
+-   narrow_llm` that step 4 didn't already fill, split by section: Methods
+-   text → Block 1 narrow fields, Results text → the Block 2 sub-blocks
+-   named in `response_types_detected`.
++   call (through `src/llm_client.py`) reading the Abstract + the start of
++   Results. Output populates `response_types_detected` (e.g.
++   `"yield,ghg_n2o"`) and determines which Block 2 sub-blocks (`yield`,
++   `ghg`, `soc`, `nitrogen`) to even attempt. A paper can hit more than
++   one — do not assume exclusivity. No supported type → Block 2 stays
++   blank and the paper is logged.
++6. **Narrow LLM extraction — two calls per paper**, both scoped ONLY to
++   the section text located in step 3, never the full paper:
++   - 6a `enumerate_experimental_units()` — Methods + Results + the
++     species candidate list from step 4 → the LIST OF ROWS the paper
++     contributes. One row = one design combination (cover crop
++     treatment/species × year × site × …) × one response variable (yield,
++     ONE gas, SOC, one nitrogen metric). Each unit carries its own
++     species/year/… plus the `{block}_cc_mean / _control_mean / _sd /
++     _unit / _n` values and `gas_type` / `nitrogen_type`. Species that
++     appear only as cash crops or rotation partners are not rows.
++     `cc_years_practiced` (every calendar year CC was actually practiced,
++     e.g. "2016,2017") is also per-unit. **Multiple physical sites**: if
++     the paper describes two or more sites/farms under DIFFERENT
++     management, a unit MAY also carry its own `location` /
++     `tillage_type_raw` / `fertilize_raw` / `herbicide_raw` /
++     `irrigation_raw` / `soil_texture_raw` / `latitude` / `longitude` —
++     see `SITE_VARIABLE_FIELDS` — overriding the paper-wide value from 6b
++     for that row only (step 11 merges shared-then-unit, unit wins).
++     Leave these null for a single-site paper; the shared value is used.
++   - 6b `extract_narrow_llm()` — Methods text → the paper-level Block 1
++     `narrow_llm` fields step 4 didn't fill (country, location,
++     irrigation_raw, soil_texture_raw, …), used by every row UNLESS a
++     unit from 6a overrides it for a multi-site paper (see above).
+ 7. **Vision extraction, only if needed** — `extract_vision_llm()`. Trigger
+-   ONLY when a Results value is explicitly referenced as being in a
+-   figure (e.g. "as shown in Fig. 3") and step 6 did not find it in text.
+-   Render the specific PDF page to an image (code, no LLM) and pass only
+-   that image to a vision-capable call. **Rule: any field filled this way
+-   is capped at `medium` confidence, never `high`, unless the figure
+-   prints an explicit numeric data label** — chart-reading is an
++   ONLY when a unit's value came back null with a figure reference in its
++   evidence (e.g. "Fig. 3") — render that PDF page to an image (code, no
++   LLM) and pass only that image to a vision-capable call. **Rule: any
++   field filled this way is capped at `medium` confidence unless the
++   figure prints an explicit numeric data label** — chart-reading is an
+    estimate, not a measurement.
+ 8. **Normalize** — `normalize_fields()`. For every `_raw` field with a
+    paired `_norm` field in the schema, apply the controlled-vocabulary
+@@ -93,7 +122,12 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
+     for real on an environment with open network access (e.g. CyVerse).**
+     When step 4's regex value and step 6's LLM value disagree on the same
+     field, do not silently prefer one — flag for human review.
+-11. **Confidence-tag and assemble the row** — `assemble_row()`. Every
++11. **Confidence-tag and assemble the rows** — `assemble_rows()`. Shared
++    Block 1 fields are merged into every unit from step 6a (unit value
++    wins on conflict — this is how a multi-site paper's per-site
++    overrides from 6a take effect); steps 8-9 run per row, plus
++    `compute_cc_duration()` (count of distinct years in
++    `cc_years_practiced` → `cc_duration_years`). Every
+     extracted field gets a `high` / `medium` / `low` confidence and a
+     one-line source note, same convention as the prior Book4.xlsx
+     year-extraction pass: `high` = deterministic match or a verbatim
+@@ -102,7 +136,7 @@ input PDF, build an `ExtractionWorkflow`, call `run_extraction()`.
+     publication-year-minus-lag, or any other estimate. A field the
+     pipeline cannot fill after all of the above stays blank — never
+     fabricate a value to complete a row.
+-12. **Write output and log** — `run_extraction()` appends the row to
++12. **Write output and log** — `run_extraction()` appends the rows to
+     `workflows/<project_name>/output/`, then **append to
+     `PROMPT_ACTION_LOG.md`** — date, user's exact prompt, model name,
+     files inspected, actions taken, verification performed, and any
+@@ -124,7 +158,10 @@ scripts/                             Pre-flight helper scripts
+   check_urls.py
+   find_species.py
+ examples/book4_reference/            Reference example (read-only) — target output shape
++src/llm_client.py                    The ONLY place that calls a model (OpenAI-compatible API)
++workflows/run_extraction.py          Generic CLI runner (use this unless a custom script is needed)
+ workflows/<project_name>/            Each extraction run gets its own folder
++  input/                             PDFs for this run (optional)
+   <script>.py
+   output/                            Generated table(s), append-only
+ docs/                                Not yet built for this project — see README for status
+@@ -151,6 +188,15 @@ from src.literature_extractor import (
+ )
+ ```
+ 
++For most runs you do not need a new script at all:
++
++```bash
++export OPENAI_API_KEY=...            # AI Verde key
++export LLM_MODEL=anthropic/claude-sonnet-4   # whatever AI Verde lists
++python workflows/run_extraction.py --project <name> --pdf <file.pdf> --prompt "<user's request>"
++python workflows/run_extraction.py --project <name> --pdf <file.pdf> --no-llm   # deterministic only
++```
++
+ ---
+ 
+ ## Batch Runs
+@@ -171,7 +217,8 @@ failure against that paper, continue to the next.
+ 
+ ## Output Requirements
+ 
+-- One row per treatment comparison, appended to
++- One row per (design combination × response variable) — see step 6a —
++  appended to
+   `workflows/<project_name>/output/<name>.csv` (or `.xlsx` if the user
+   asked for Excel), columns exactly matching `schema/cover_crop_schema.yml`
+   in field order.
+diff --git a/requirements.txt b/requirements.txt
+index 6a11dcf..adf4e10 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -17,6 +17,15 @@ requests>=2.28
+ # Testing
+ pytest>=7.0
+ 
+-# NOTE: LLM calls (classify_response_type, extract_narrow_llm,
+-# extract_vision_llm) are stubs in src/literature_extractor.py — add
+-# your model provider's SDK here once you wire them (e.g. anthropic>=0.40).
++# LLM calls (src/llm_client.py) — any OpenAI-compatible endpoint; on
++# CyVerse this is the AI Verde gateway (Claude-series models).
++openai>=1.40
++
++# Geolocation stage (src/geolocation.py) — point -> polygon via the
++# station registry + USDA Crop Sequence Boundaries. shapely is a hard
++# dependency of the matching logic itself; geopandas/fiona are only
++# needed to actually LOAD stations.gpkg / the CSB .gdb (real files live
++# on CyVerse), so install those there when running this stage for real.
++shapely>=2.0
++geopandas>=0.14  # only needed on CyVerse, to read stations.gpkg / CSB .gdb
++fiona>=1.9        # only needed on CyVerse, to list/read CSB .gdb layers
+diff --git a/schema/cover_crop_schema.yml b/schema/cover_crop_schema.yml
+index ed38443..2a9e92b 100644
+--- a/schema/cover_crop_schema.yml
++++ b/schema/cover_crop_schema.yml
+@@ -29,6 +29,14 @@
+ #     its variance — same response-ratio meta-analysis method already
+ #     in use, just generalized beyond yield.
+ #
++#   ROW GRANULARITY (v0.5): one row = one experimental-design
++#     combination (cover crop treatment/species x year x site x ...)
++#     x one response variable (yield, or one gas, or SOC, or one
++#     nitrogen metric). A paper therefore yields MANY rows; Block 1
++#     fields that the paper states once (coordinates, country, tillage)
++#     are repeated on every row. The "enumerate experimental units"
++#     pipeline stage produces this row list.
++#
+ # This schema supersedes the earlier draft based on Garba et al. (2022)
+ # Table S1-S3, which is no longer used as a schema reference.
+ #
+@@ -67,7 +75,7 @@
+ #
+ # ══════════════════════════════════════════════════════════════════════════
+ 
+-schema_version: "0.4"
++schema_version: "0.5"
+ sheet_name: yield_record
+ source_reference: Table_S1_for_myself.xlsx (sheet "Yield Record")
+ 
+@@ -255,6 +263,32 @@ fields:
+         FIELD for the extraction pipeline, same confidence/source
+         tracking approach as the Book4.xlsx year-extraction work.
+ 
++    - name: cc_years_practiced
++      type: string
++      nullable: true
++      status: proposed_new
++      extraction_method: narrow_llm
++      description: >
++        NOT in the source file. Every calendar year cover cropping was
++        actually practiced in THIS row's experiment/site, comma-
++        separated (e.g. "2016,2017"). Distinct from `year` (the single
++        calendar year THIS row's measurement was taken) and from
++        `ccs_year_duration` (this measurement's position in the multi-
++        year sequence, e.g. "2nd consecutive year of CC"). If the paper
++        states a start year plus a count ("cover crops were grown for
++        3 consecutive years starting in 2016"), list every year
++        explicitly ("2016,2017,2018") rather than just the start year.
++
++    - name: cc_duration_years
++      type: integer
++      nullable: true
++      status: proposed_new
++      extraction_method: computed_downstream
++      description: >
++        NOT in the source file. Count of distinct years in
++        cc_years_practiced (e.g. 2 for "2016,2017"). Computed from
++        cc_years_practiced, not extracted directly by the LLM.
++
+     - name: cc_planting_time_raw
+       source_column: "CCs Planting Time"
+       type: string
+@@ -566,129 +600,66 @@ fields:
+       extraction_method: computed_downstream
+       description: Legacy variant from the source file's SD-imputation history. Computed.
+ 
+-  # ── GHG (CO2 / N2O / CH4) ────────────────────────────────────────────
++  # ── GHG (CO2 / N2O / CH4) — LONG format ─────────────────────────────
++  # One row per gas. A paper that reports CO2 and N2O for the same
++  # treatment produces two rows sharing every Block 1 field and
++  # differing only in gas_type + the ghg_* values (same convention as
++  # nitrogen_type below, and the same shape as the user's working
++  # Book1.xlsx, where co2 and n2o are separate rows with generic
++  # cc / no_cc value columns). Decided 2026-09-10; supersedes the earlier
++  # wide layout (ghg_co2_* / ghg_n2o_* / ghg_ch4_* side by side).
+   ghg_data:
+-    - name: ghg_co2_cc_mean
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-      description: Mean CO2 flux/emission under the cover crop treatment.
+-    - name: ghg_co2_control_mean
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-      description: Mean CO2 flux/emission under the control (fallow) treatment.
+-    - name: ghg_co2_cc_sd
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-    - name: ghg_co2_control_sd
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-    - name: ghg_co2_unit
+-      type: string
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-      description: e.g. "kg CO2-C ha-1", "mg CO2 m-2 h-1".
+-    - name: ghg_co2_n
+-      type: integer
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-    - name: ghg_co2_ln_response_ratio
+-      type: float
+-      status: proposed_new
+-      extraction_method: computed_downstream
+-    - name: ghg_co2_var_lnr
+-      type: float
+-      status: proposed_new
+-      extraction_method: computed_downstream
+-
+-    - name: ghg_n2o_cc_mean
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-      description: Mean N2O flux/emission under the cover crop treatment.
+-    - name: ghg_n2o_control_mean
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-    - name: ghg_n2o_cc_sd
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-    - name: ghg_n2o_control_sd
+-      type: float
+-      nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-    - name: ghg_n2o_unit
++    - name: gas_type
+       type: string
+       nullable: true
+-      status: proposed_new
+-      extraction_method: narrow_llm
+-    - name: ghg_n2o_n
+-      type: integer
+-      nullable: true
+-      status: proposed_new
++      status: active
+       extraction_method: narrow_llm
+-    - name: ghg_n2o_ln_response_ratio
+-      type: float
+-      status: proposed_new
+-      extraction_method: computed_downstream
+-    - name: ghg_n2o_var_lnr
+-      type: float
+-      status: proposed_new
+-      extraction_method: computed_downstream
+-
+-    - name: ghg_ch4_cc_mean
++      controlled_vocabulary: ["co2", "n2o", "ch4"]
++      description: Which greenhouse gas this row's ghg_* values describe. Required whenever any ghg_* field is filled.
++    - name: ghg_cc_mean
+       type: float
+       nullable: true
+-      status: proposed_new
++      status: active
+       extraction_method: narrow_llm
+-      description: Mean CH4 flux/emission under the cover crop treatment.
+-    - name: ghg_ch4_control_mean
++      description: Mean flux / cumulative emission of gas_type under the cover crop treatment.
++    - name: ghg_control_mean
+       type: float
+       nullable: true
+-      status: proposed_new
++      status: active
+       extraction_method: narrow_llm
+-    - name: ghg_ch4_cc_sd
++      description: Mean flux / cumulative emission of gas_type under the no-cover-crop control.
++    - name: ghg_cc_sd
+       type: float
+       nullable: true
+-      status: proposed_new
++      status: active
+       extraction_method: narrow_llm
+-    - name: ghg_ch4_control_sd
++    - name: ghg_control_sd
+       type: float
+       nullable: true
+-      status: proposed_new
++      status: active
+       extraction_method: narrow_llm
+-    - name: ghg_ch4_unit
++    - name: ghg_unit
+       type: string
+       nullable: true
+-      status: proposed_new
++      status: active
+       extraction_method: narrow_llm
+-    - name: ghg_ch4_n
++      description: Verbatim unit, e.g. "kg N2O-N ha-1", "g CO2-C m-2 d-1", "kg CH4-C ha-1 yr-1". Also record the integration period if the unit does not imply it (see notes).
++    - name: ghg_n
+       type: integer
+       nullable: true
+-      status: proposed_new
++      status: active
+       extraction_method: narrow_llm
+-    - name: ghg_ch4_ln_response_ratio
++      description: Replicates per treatment mean.
++    - name: ghg_ln_response_ratio
+       type: float
+-      status: proposed_new
++      status: active
+       extraction_method: computed_downstream
+-    - name: ghg_ch4_var_lnr
++      description: "ln(ghg_cc_mean / ghg_control_mean). Computed, never extracted."
++    - name: ghg_var_lnr
+       type: float
+-      status: proposed_new
++      status: active
+       extraction_method: computed_downstream
++      description: "sd_cc^2/(n*cc_mean^2) + sd_ctrl^2/(n*ctrl_mean^2). Computed only when both SDs and n are present."
+ 
+   # ── SOC (Soil Organic Carbon) ────────────────────────────────────────
+   soc_data:
+@@ -807,5 +778,5 @@ open_questions:
+   - "cc_family_taxonomic (Unnamed: 12, sparse): keep as its own field, drop, or fold into cc_species_scientific lookup?"
+   - "doi field: does a separate article-level table already exist (keyed by paper_id) holding DOI/citation, or should this row-level table carry doi directly?"
+   - "cc_species_scientific: confirm whether to add this proposed field (Latin binomial, WFO/GBIF-validated)."
+-  - "All of ghg_data / soc_data / nitrogen_data / yield_unit / response_types_detected are proposed_new — none exist in the source file. Confirm the field names and units before the extraction pipeline targets them."
++  - "soc_data / nitrogen_data / yield_unit / response_types_detected are proposed_new — none exist in the source file. Confirm the field names and units before the extraction pipeline targets them. (ghg_data was confirmed 2026-09-10 in its long-format form and is now active.)"
+   - "Beyond yield/GHG/SOC/nitrogen, should the schema anticipate other ecosystem-service types seen in the literature (e.g. soil water content, weed suppression, disease) as future wide-table sub-blocks, or add those only when a paper actually needs one?"
+diff --git a/src/geolocation.py b/src/geolocation.py
+new file mode 100644
+index 0000000..ae90685
+--- /dev/null
++++ b/src/geolocation.py
+@@ -0,0 +1,298 @@
++"""
++geolocation.py — Stage 4 of the ground-truth workflow
++(claude/cc-groundtruth-workflow-v0.md, "Geolocation: point -> polygon,
++tiered"). Run ONCE over the harmonized, de-duplicated site list (station
++reuse across papers is high — see AGENTS-level discussion 2026-09-11), not
++per-paper inside the LLM extraction pipeline. literature_extractor.py stays
++point-only (latitude/longitude); this module is a separate downstream step
++that upgrades a site's geometry from a point to a polygon where possible.
++
++Decision (confirmed 2026-09-11): for each unique site, try in order —
++
++  1. Station registry match — the site's raw station/farm name (as printed
++     in the paper) matched against a manually-curated registry of
++     name + aliases + polygon, built by hand in QGIS/Google Earth
++     (`stations.gpkg`, not yet created as of 2026-09-11 — this module
++     degrades gracefully to an empty registry until it exists).
++     -> geom_source="station", spatial_tier = the registry entry's own
++        precision_tier ("S" = farm-envelope-only polygon, the common case;
++        "A" if that entry was itself built from a NAIP-verified plot
++        boundary rather than just the farm outline).
++  2. USDA Crop Sequence Boundaries (CSB) point-in-polygon, by year.
++     Path confirmed 2026-09-11: /home/pengyuwh/Crop Sequence Boundaries
++     on the CyVerse Data Store (exact .gdb filename/layer TBD — see
++     load_csb()'s docstring).
++     -> geom_source="csb", spatial_tier="C" (field-level polygon; this
++        code does NOT infer that a treatment covered the whole field, so
++        it never auto-assigns tier "B" — promote C -> B by hand once a
++        human confirms field-wide treatment).
++  3. Neither resolves -> geom_source="none", spatial_tier="D". The site
++     is returned in the manual-review queue for later NAIP delineation
++     (confirmed fallback, 2026-09-11) — this module never guesses a
++     geometry for it.
++
++geom_source values (paper_map/naip_manual/csb/station/none) and spatial
++tiers (A/B/C/S/D) match the target schema already drafted in
++claude/cc-groundtruth-workflow-v0.md — "paper_map" and "naip_manual" are
++produced by the human-review steps elsewhere in that pipeline, not by this
++module.
++
++Design note: matching logic here (match_station_name, match_csb_polygon,
++resolve_site_geometry) works on plain dicts + shapely geometries, NOT
++GeoDataFrames — geopandas/fiona are only imported inside the two loader
++functions (load_station_registry, load_csb), which are the I/O boundary.
++This keeps the matching logic unit-testable without geopandas/fiona
++installed (see tests/test_geolocation.py), since only shapely is a hard
++dependency of the matching itself.
++"""
++
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Optional
++
++# CyVerse Data Store path confirmed 2026-09-11. The exact .gdb file inside
++# this folder and its layer-per-year naming still need to be confirmed
++# against the real data (see load_csb()) — this is a starting point, not
++# yet verified against the live file.
++DEFAULT_CSB_PATH = Path("/home/pengyuwh/Crop Sequence Boundaries")
++
++# Not yet created (2026-09-11) — the user is building this by hand in
++# QGIS/Google Earth. load_station_registry() returns [] until it exists,
++# so every site falls through to CSB / tier D in the meantime.
++DEFAULT_STATION_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "stations.gpkg"
++
++
++@dataclass
++class SiteGeometryResult:
++    geometry_geojson: Optional[str]  # GeoJSON geometry string, or None if unresolved
++    geom_source: str                 # "station" | "csb" | "none"
++    spatial_tier: str                # "A" | "B" | "C" | "S" | "D"
++    matched_key: Optional[str]       # registry key or CSB field id, for provenance
++    notes: str = ""
++
++
++# ═══════════════════════════ Loaders (geopandas/fiona boundary) ═══════════
++
++def load_station_registry(path: Path = DEFAULT_STATION_REGISTRY_PATH) -> list[dict]:
++    """
++    Load the manually-curated station registry into plain dicts:
++    {"key": <canonical name>, "names": [name, *aliases],
++     "geometry": <shapely geometry>, "precision_tier": "S"|"A",
++     "boundary_source": <free text>}.
++
++    Expected registry columns (once stations.gpkg exists): name, aliases
++    (";"-separated string), precision_tier, boundary_source, geometry.
++    Returns [] if the file doesn't exist yet — this is the expected state
++    until the registry is built (confirmed 2026-09-11), not an error.
++    """
++    if not Path(path).exists():
++        return []
++    import geopandas as gpd  # local import: only needed when the file exists
++
++    gdf = gpd.read_file(path)
++    entries = []
++    for _, row in gdf.iterrows():
++        aliases = [a.strip() for a in str(row.get("aliases") or "").split(";") if a.strip()]
++        entries.append({
++            "key": row["name"],
++            "names": [row["name"], *aliases],
++            "geometry": row.geometry,
++            "precision_tier": row.get("precision_tier") or "S",
++            "boundary_source": row.get("boundary_source") or "",
++        })
++    return entries
++
++
++def load_csb(csb_path: Path = DEFAULT_CSB_PATH, year: Optional[int] = None) -> list[dict]:
++    """
++    Load USDA Crop Sequence Boundaries field polygons into plain dicts:
++    {"field_id": ..., "geometry": <shapely geometry>}.
++
++    TODO (unverified as of 2026-09-11): CSB ships as a multi-year gdb; the
++    real layer names and the field-id column need confirming against the
++    actual file at DEFAULT_CSB_PATH (run `fiona.listlayers(csb_path)` on
++    CyVerse and adjust _pick_csb_layer()/the "CSBID" column name below —
++    this is a best-effort placeholder, not yet run against the live data).
++    """
++    import fiona
++    import geopandas as gpd
++
++    csb_path = Path(csb_path)
++    gdb_candidates = list(csb_path.glob("*.gdb")) if csb_path.is_dir() else [csb_path]
++    if not gdb_candidates:
++        raise FileNotFoundError(f"No .gdb found under {csb_path}")
++    gdb_path = gdb_candidates[0]
++
++    layers = fiona.listlayers(gdb_path)
++    layer = _pick_csb_layer(layers, year)
++    gdf = gpd.read_file(gdb_path, layer=layer)
++
++    id_col = "CSBID" if "CSBID" in gdf.columns else gdf.columns[0]
++    return [{"field_id": row[id_col], "geometry": row.geometry} for _, row in gdf.iterrows()]
++
++
++def _pick_csb_layer(layers: list[str], year: Optional[int]) -> str:
++    """
++    Best-effort pick of the CSB layer covering `year`. Placeholder until
++    real layer names are confirmed — CSB releases are typically named for
++    a multi-year span (e.g. "CSB1519" for 2015-2019); once the real names
++    are known, replace this with an explicit year-range lookup instead of
++    "first layer with digits in its name".
++    """
++    if year is None or not layers:
++        return layers[0]
++    for layer in layers:
++        if re.search(r"\d", layer):
++            return layer
++    return layers[0]
++
++
++# ═══════════════════════════ Matching (pure shapely, no geopandas) ═══════
++
++def _normalize_name(name: str) -> str:
++    """Lowercase, punctuation-stripped form for loose station-name matching."""
++    return re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
++
++
++def match_station_name(station_name_raw: Optional[str], registry: list[dict]) -> Optional[dict]:
++    """
++    Loose match of a paper's raw station/farm name against the registry's
++    name + aliases: exact match after normalization wins immediately;
++    otherwise the longest substring match either direction (station names
++    in papers are often abbreviated, reordered, or missing "Research" /
++    "Farm" — e.g. "NDSU Horticulture Farm" vs the registry's "Horticulture
++    Research Farm, North Dakota State University"). Returns the best-
++    scoring registry entry, or None if nothing matches.
++    """
++    if not station_name_raw or not registry:
++        return None
++    target = _normalize_name(station_name_raw)
++    if not target:
++        return None
++
++    best, best_score = None, 0
++    for entry in registry:
++        for name in entry["names"]:
++            n = _normalize_name(name)
++            if not n:
++                continue
++            if n == target:
++                return entry
++            if n in target or target in n:
++                score = min(len(n), len(target))
++                if score > best_score:
++                    best, best_score = entry, score
++    return best
++
++
++def match_csb_polygon(lat: float, lon: float, csb_entries: list[dict]) -> Optional[dict]:
++    """Point-in-polygon lookup against a list of {"field_id", "geometry"} dicts."""
++    from shapely.geometry import Point
++
++    pt = Point(lon, lat)
++    for entry in csb_entries:
++        if entry["geometry"] is not None and entry["geometry"].contains(pt):
++            return entry
++    return None
++
++
++def resolve_site_geometry(
++    station_name_raw: Optional[str],
++    lat: Optional[float],
++    lon: Optional[float],
++    *,
++    station_registry: list[dict],
++    csb_entries: Optional[list[dict]] = None,
++) -> SiteGeometryResult:
++    """
++    Resolve ONE unique site's geometry via the confirmed 3-step fallback
++    (see module docstring). Call once per unique (station_name, lat, lon)
++    from the harmonized site list — not once per paper.
++    """
++    import json as _json
++
++    from shapely.geometry import mapping
++
++    match = match_station_name(station_name_raw, station_registry)
++    if match is not None:
++        geom = match.get("geometry")
++        return SiteGeometryResult(
++            geometry_geojson=_json.dumps(mapping(geom)) if geom is not None else None,
++            geom_source="station",
++            spatial_tier=match.get("precision_tier") or "S",
++            matched_key=match["key"],
++            notes=f"station registry match: {match['key']}",
++        )
++
++    if lat is not None and lon is not None and csb_entries:
++        csb_hit = match_csb_polygon(lat, lon, csb_entries)
++        if csb_hit is not None:
++            return SiteGeometryResult(
++                geometry_geojson=_json.dumps(mapping(csb_hit["geometry"])),
++                geom_source="csb",
++                spatial_tier="C",
++                matched_key=str(csb_hit["field_id"]),
++                notes=("USDA CSB field polygon (point-in-polygon match); "
++                       "confirm treatment covers the whole field before promoting to tier B"),
++            )
++
++    return SiteGeometryResult(
++        geometry_geojson=None,
++        geom_source="none",
++        spatial_tier="D",
++        matched_key=None,
++        notes="no station registry match and no CSB polygon at this point — queued for manual NAIP review",
++    )
++
++
++# ═══════════════════════════ Batch driver ═════════════════════════════════
++
++def resolve_all_sites(
++    sites: list[dict],
++    *,
++    station_registry_path: Path = DEFAULT_STATION_REGISTRY_PATH,
++    csb_path: Path = DEFAULT_CSB_PATH,
++    csb_year: Optional[int] = None,
++) -> tuple[list[dict], list[dict]]:
++    """
++    sites: list of {"site_key", "station_name", "lat", "lon", ...} — one
++    row per UNIQUE site (de-duplicate across papers before calling this;
++    see cc-groundtruth-workflow-v0.md step 1 "seed the station registry
++    from the unique site list").
++
++    Returns (resolved, manual_review):
++      resolved      — every input site dict, with geometry_geojson /
++                       geom_source / spatial_tier / geolocation_notes added
++      manual_review — the tier-D subset of `resolved`, ready to write to
++                       needs_manual_naip_review.csv
++    """
++    registry = load_station_registry(station_registry_path)
++
++    csb_entries: list[dict] = []
++    if csb_path and Path(csb_path).exists():
++        try:
++            csb_entries = load_csb(csb_path, csb_year)
++        except Exception as e:  # noqa: BLE001 — CSB being unavailable must not block the run
++            print(f"WARNING: could not load CSB from {csb_path} ({e!r}); "
++                  f"every unmatched site will fall through to tier D")
++
++    resolved, manual_review = [], []
++    for site in sites:
++        result = resolve_site_geometry(
++            site.get("station_name"), site.get("lat"), site.get("lon"),
++            station_registry=registry, csb_entries=csb_entries,
++        )
++        row = {
++            **site,
++            "geometry_geojson": result.geometry_geojson,
++            "geom_source": result.geom_source,
++            "spatial_tier": result.spatial_tier,
++            "geolocation_notes": result.notes,
++        }
++        resolved.append(row)
++        if result.spatial_tier == "D":
++            manual_review.append(row)
++    return resolved, manual_review
+diff --git a/src/literature_extractor.py b/src/literature_extractor.py
+index 85be461..d831a7a 100644
+--- a/src/literature_extractor.py
++++ b/src/literature_extractor.py
+@@ -5,14 +5,16 @@ Read this file before writing any workflow script (AGENTS.md step 1).
+ Do not modify it from workflows/ — add new logic in your workflow
+ script instead, importing what you need from here.
+ 
+-Implements AGENTS.md steps 1-12 / TASKS.md tasks 1-13. Pure-code stages
+-(PDF conversion, section location, deterministic extraction,
+-normalization rules, response-ratio math, row assembly) are fully
+-implemented. LLM-calling stages (classify_response_type,
+-extract_narrow_llm, extract_vision_llm, validate_with_apis) are stubs —
+-wire them to your model provider in the workflow script. Never fill
+-those in with a hardcoded guess; leaving them unimplemented and
+-skipping a paper is correct behavior until they're wired.
++Implements AGENTS.md steps 1-12. Pure-code stages (PDF conversion,
++section location, deterministic extraction, normalization rules,
++response-ratio math, row assembly) never touch a model. The judgment
++stages (classify_response_type, enumerate_experimental_units,
++extract_narrow_llm, extract_vision_llm) call the model through
++src/llm_client.py (OpenAI-compatible endpoint, configured by
++environment variables — see that module). A coding assistant driving
++this repo (Roo Code, Claude Code, ...) runs these functions; it must
++NOT substitute its own reading of the paper for their output.
++validate_with_apis (external species/geo checks) is still a stub.
+ """
+ 
+ from __future__ import annotations
+@@ -270,19 +272,56 @@ def _parse_coord(number_str: str, compass_letter: str | None, negative_letters:
+     return -value if (is_negative_by_text or is_negative_by_letter) else value
+ 
+ TILLAGE_KEYWORDS = {
+-    "no-till": "NT", "no till": "NT", "notill": "NT",
+-    "conventional tillage": "CT", "conventional till": "CT",
+-    "reduced till": "RT", "reduced-till": "RT", "reduced tillage": "RT",
++    "no-till": "NT", "no till": "NT", "notill": "NT", "zero tillage": "NT", "zero-till": "NT",
++    "conventional tillage": "CT", "conventional till": "CT", "moldboard": "CT", "mouldboard": "CT",
++    "reduced till": "RT", "reduced-till": "RT", "reduced tillage": "RT", "minimum tillage": "RT",
++    "strip-till": "RT", "strip till": "RT",
+ }
+ 
++N_RATE_PATTERN = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*kg\s*N\s*ha\s*[-−]?\s*1", re.IGNORECASE)
++
++
++def find_species_candidates(section_text: str, data_catalog: dict) -> list[dict]:
++    """
++    Every gazetteer species mentioned anywhere in section_text, with the
++    matched name and how many times it appears. This is an INTERMEDIATE
++    signal for enumerate_experimental_units(), not a schema field: the
++    gazetteer also contains crops that appear as cash crops or in
++    rotations (barley, soybean, ...), so a mention is not proof that the
++    species was used as a cover crop. The LLM enumeration step decides
++    which candidates are actual cover-crop treatments, quoting the text.
++    """
++    candidates: list[dict] = []
++    for entry in data_catalog.get("species_gazetteer", []):
++        names = [entry["scientific_name"], *entry.get("common_names", [])]
++        best_name, hits = None, 0
++        for name in names:
++            n = len(re.findall(r"\b" + re.escape(name) + r"\b", section_text, re.IGNORECASE))
++            if n and (best_name is None or n > hits):
++                best_name, hits = name, n
++        if best_name:
++            candidates.append({
++                "matched_name": best_name,
++                "scientific_name": entry["scientific_name"],
++                "cc_category": entry["cc_category"],
++                "family": entry.get("family"),
++                "mentions": hits,
++            })
++    candidates.sort(key=lambda c: -c["mentions"])
++    return candidates
++
+ 
+ def extract_deterministic(section_text: str, data_catalog: dict) -> dict[str, ExtractedField]:
+     """
+     AGENTS.md step 4. Regex + gazetteer only — zero LLM tokens. Covers
+     schema fields tagged extraction_method: regex or gazetteer:
+-    latitude/longitude, cc_species/cc_species_scientific/cc_category,
+-    tillage. Extend this function as more deterministic fields are
+-    added, rather than pushing them into the narrow_llm stage.
++    latitude/longitude, tillage, cc_n_rate_kg_ha, and the species
++    candidate list (stored under the non-schema key
++    'cc_species_candidates'). cc_species itself is only set here when
++    EXACTLY ONE gazetteer species occurs in the text — with several
++    candidates the assignment is left to enumerate_experimental_units(),
++    which reads the experimental design and can tell a cover crop from
++    a cash crop or rotation partner.
+     """
+     fields: dict[str, ExtractedField] = {}
+ 
+@@ -295,92 +334,318 @@ def extract_deterministic(section_text: str, data_catalog: dict) -> dict[str, Ex
+             fields["latitude"] = ExtractedField(lat, "high", "decimal-degree match in text", "regex")
+             fields["longitude"] = ExtractedField(lon, "high", "decimal-degree match in text", "regex")
+ 
+-    for entry in data_catalog.get("species_gazetteer", []):
+-        names = [entry["scientific_name"], *entry.get("common_names", [])]
+-        for name in names:
+-            if re.search(re.escape(name), section_text, re.IGNORECASE):
+-                fields["cc_species"] = ExtractedField(name, "high", f"gazetteer match: {name}", "gazetteer")
+-                fields["cc_species_scientific"] = ExtractedField(
+-                    entry["scientific_name"], "high", "gazetteer lookup", "gazetteer"
+-                )
+-                fields["cc_category"] = ExtractedField(
+-                    entry["cc_category"], "high", "derived from species family in gazetteer", "gazetteer"
+-                )
+-                break
+-        if "cc_species" in fields:
+-            break
++    candidates = find_species_candidates(section_text, data_catalog)
++    fields["cc_species_candidates"] = ExtractedField(
++        candidates, "high", f"{len(candidates)} gazetteer species mentioned", "gazetteer"
++    )
++    if len(candidates) == 1:
++        c = candidates[0]
++        fields["cc_species"] = ExtractedField(c["matched_name"], "high", f"gazetteer match: {c['matched_name']} (only species in text)", "gazetteer")
++        fields["cc_species_scientific"] = ExtractedField(c["scientific_name"], "high", "gazetteer lookup", "gazetteer")
++        fields["cc_category"] = ExtractedField(c["cc_category"], "high", "derived from species family in gazetteer", "gazetteer")
+ 
+     for phrase, code in TILLAGE_KEYWORDS.items():
+         if re.search(re.escape(phrase), section_text, re.IGNORECASE):
+             fields["tillage"] = ExtractedField(code, "high", f"keyword match: '{phrase}'", "gazetteer")
+             break
+ 
++    n_match = N_RATE_PATTERN.search(section_text)
++    if n_match:
++        fields["cc_n_rate_kg_ha"] = ExtractedField(
++            float(n_match.group(1)), "medium", f"first 'kg N ha-1' figure in text: {n_match.group(0)!r} — confirm it refers to the cover crop", "regex"
++        )
++
+     return fields
+ 
+ 
++# ═══════════════════════════ LLM prompt helpers ═══════════════════════════
++
++_SYSTEM_BASE = (
++    "You are a meticulous data-extraction assistant for an agricultural "
++    "meta-analysis on cover crops. You only report what the supplied text "
++    "states. You never guess, never fill gaps from general knowledge, and "
++    "you always answer with valid JSON and nothing else. For every value "
++    "you report, give a short verbatim quote from the text as evidence."
++)
++
++
++def _field_descriptions(schema: dict, field_names: list[str]) -> str:
++    lookup = {f["name"]: f for fl in schema["fields"].values() for f in fl}
++    lines = []
++    for name in field_names:
++        f = lookup.get(name, {})
++        desc = " ".join(str(f.get("description", "")).split())
++        vocab = f.get("controlled_vocabulary")
++        line = f"- {name} ({f.get('type', 'string')}): {desc}"
++        if vocab:
++            line += f" Allowed values: {vocab}."
++        lines.append(line)
++    return "\n".join(lines)
++
++
++def _to_extracted(obj: dict, default_method: str, cap: Optional[str] = None) -> Optional[ExtractedField]:
++    """{'value':..,'confidence':..,'evidence':..} -> ExtractedField (None if value is null)."""
++    if not isinstance(obj, dict) or obj.get("value") in (None, "", "null", "NA", "N/A"):
++        return None
++    conf = str(obj.get("confidence", "medium")).lower()
++    if conf not in ("high", "medium", "low"):
++        conf = "medium"
++    if cap == "medium" and conf == "high":
++        conf = "medium"
++    return ExtractedField(obj["value"], conf, str(obj.get("evidence", ""))[:300], default_method)
++
++
++def _truncate(text: Optional[str], max_chars: int) -> str:
++    if not text:
++        return ""
++    return text if len(text) <= max_chars else text[:max_chars] + "\n[...truncated...]"
++
++
+ # ═══════════════════════════ Step 5: Classify response type (LLM) ════════
+ 
+ RESPONSE_TYPE_OPTIONS = ["yield", "ghg_co2", "ghg_n2o", "ghg_ch4", "soc", "nitrogen"]
+ 
++# response type -> (schema sub-block, gas_type / nitrogen_type hint)
++RESPONSE_TYPE_TO_BLOCK = {
++    "yield": ("yield", None),
++    "ghg_co2": ("ghg", "co2"),
++    "ghg_n2o": ("ghg", "n2o"),
++    "ghg_ch4": ("ghg", "ch4"),
++    "soc": ("soc", None),
++    "nitrogen": ("nitrogen", None),
++}
+ 
+-def classify_response_type(abstract_text: str, results_text: Optional[str]) -> ExtractedField:
+-    """
+-    AGENTS.md step 5. ONE cheap LLM call reading the abstract plus
+-    Results headers/captions. Must return a comma-separated subset of
+-    RESPONSE_TYPE_OPTIONS — a paper can hit more than one.
+ 
+-    STUB — wire this to your model provider in the workflow script.
+-    Do not default to a guessed category here; an unclassified paper
+-    should be logged and skipped, not assumed to be yield-only.
++def classify_response_type(abstract_text: str, results_text: Optional[str], cfg=None) -> ExtractedField:
+     """
+-    raise NotImplementedError(
+-        "classify_response_type: wire to your LLM provider in the workflow script. "
+-        f"Expected output: comma-separated subset of {RESPONSE_TYPE_OPTIONS}."
++    AGENTS.md step 5. ONE cheap LLM call reading the abstract plus the
++    first part of Results (headers/captions). Returns an ExtractedField
++    whose value is a comma-separated subset of RESPONSE_TYPE_OPTIONS —
++    a paper can hit more than one. An empty string means the paper
++    reports none of the supported response types (log and skip it).
++    """
++    from src import llm_client
++
++    user = (
++        f"Supported response types: {RESPONSE_TYPE_OPTIONS}\n"
++        "- yield: cash/grain crop yield compared between cover crop and no-cover-crop treatments\n"
++        "- ghg_co2 / ghg_n2o / ghg_ch4: soil flux or cumulative emission of that gas\n"
++        "- soc: soil organic carbon stock or concentration\n"
++        "- nitrogen: soil mineral N, N leaching, or total soil N\n\n"
++        "Which of these does the paper report with numeric cover-crop vs control comparisons? "
++        "Only include a type if numbers for BOTH a cover crop treatment and a no-cover-crop control appear.\n\n"
++        f"ABSTRACT:\n{_truncate(abstract_text, 6000)}\n\n"
++        f"RESULTS (first part):\n{_truncate(results_text, 8000)}\n\n"
++        'Answer as JSON: {"response_types": [...], "evidence": "<short quote(s)>"}'
+     )
++    data = llm_client.chat_json(_SYSTEM_BASE, user, purpose="classify_response_type", cfg=cfg)
++    types = [t for t in data.get("response_types", []) if t in RESPONSE_TYPE_OPTIONS]
++    return ExtractedField(",".join(types), "high" if types else "low",
++                          str(data.get("evidence", ""))[:300], "narrow_llm")
++
++
++# ═══════════════════════════ Step 6a: Enumerate experimental units (LLM) ══
++
++# Fields the enumeration LLM call can vary PER UNIT (per row). Most of
++# these are also in SHARED_NARROW_FIELDS / extracted once per paper via
++# extract_deterministic (latitude/longitude) as the PAPER-LEVEL fallback
++# value; assemble_rows() merges shared-then-unit ({**shared, **unit}), so
++# a unit only needs to report one of these when THIS row's value differs
++# from the paper-wide one (e.g. a paper with two physically distinct
++# sites under different management — see SITE_VARIABLE_FIELDS below).
++# Leaving them null for a single-site paper is correct and expected: the
++# shared paper-level value is used automatically, with no regression.
++SITE_VARIABLE_FIELDS = ["location", "tillage_type_raw", "fertilize_raw", "herbicide_raw",
++                        "irrigation_raw", "soil_texture_raw", "latitude", "longitude"]
++
++UNIT_DESIGN_FIELDS = ["cc_species", "cc_species_scientific", "cc_type", "cc_category",
++                      "year", "cc_years_practiced", "grain_crop_raw",
++                      "cc_planting_time_raw", "cc_terminating_time_raw",
++                      *SITE_VARIABLE_FIELDS]
++
++
++def enumerate_experimental_units(
++    methods_text: str,
++    results_text: Optional[str],
++    species_candidates: list[dict],
++    response_types: list[str],
++    schema: dict,
++    cfg=None,
++) -> list[dict[str, ExtractedField]]:
++    """
++    AGENTS.md step 6a. ONE LLM call that turns a paper into the list of
++    rows it should produce. One unit = one experimental-design
++    combination (cover crop treatment/species x year x site ...) x one
++    response variable (yield, one gas, SOC, one nitrogen metric).
++
++    Returns a list of dicts of ExtractedField, each holding the design
++    fields that differ between rows (cc_species, cc_type, year, ...) plus
++    the Block 2 values for that unit's response variable
++    ({prefix}cc_mean / {prefix}control_mean / _sd / _unit / _n and
++    gas_type / nitrogen_type). Shared Block 1 fields are NOT repeated
++    here UNLESS a unit's actual value differs from the paper-wide one
++    (see SITE_VARIABLE_FIELDS) — e.g. a paper with two physically
++    distinct sites under different management reports one set of units
++    per site, each carrying that site's own tillage/fertilize/herbicide/
++    irrigation/soil/coordinates; assemble_rows() merges shared-then-unit,
++    so the unit's value always wins and a single-site paper is unaffected
++    (its units simply leave these fields null).
++    """
++    from src import llm_client
++
++    blocks = sorted({RESPONSE_TYPE_TO_BLOCK[t][0] for t in response_types if t in RESPONSE_TYPE_TO_BLOCK})
++    gases = [RESPONSE_TYPE_TO_BLOCK[t][1] for t in response_types if t.startswith("ghg_")]
++
++    value_fields = []
++    for b in blocks:
++        value_fields += [f"{b}_cc_mean", f"{b}_control_mean", f"{b}_cc_sd", f"{b}_control_sd", f"{b}_unit", f"{b}_n"]
++        if b == "ghg":
++            value_fields.append("gas_type")
++        if b == "nitrogen":
++            value_fields += ["nitrogen_type", "nitrogen_depth_cm"]
++        if b == "soc":
++            value_fields.append("soc_depth_cm")
++
++    cand_txt = "\n".join(
++        f"- {c['matched_name']} ({c['scientific_name']}, {c['cc_category']}, mentioned {c['mentions']}x)"
++        for c in species_candidates
++    ) or "- (none matched the gazetteer — read species names from the text)"
++
++    user = (
++        "TASK: enumerate every row this paper should contribute to a meta-analysis table.\n"
++        "One row = one experimental-design combination (cover crop treatment or species, "
++        "year or season, site, and any other factor the paper varies) x ONE response variable.\n"
++        f"Response variables to enumerate: {response_types} "
++        f"(GHG gases -> one row per gas: {gases or 'n/a'}).\n"
++        "A mixture is ONE treatment (cc_species = the mixture's components joined by ' + ', cc_type = 'mixture').\n"
++        "Only species used AS COVER CROPS are treatments. Cash crops, rotation partners, or "
++        "species mentioned in the literature review are NOT rows.\n"
++        "Every row must pair a cover-crop value with the matching no-cover-crop control value "
++        "from the same year/site/factor level. If a value only appears in a figure, set it to "
++        "null and put the figure reference (e.g. 'Fig. 3') in evidence.\n\n"
++        "MULTIPLE PHYSICAL SITES: if the paper describes more than one physically distinct "
++        "site/farm/region under DIFFERENT management (e.g. an 'East site' with conventional "
++        "tillage and fertilizer vs. a 'West site' with no fertilizer) enumerate SEPARATE rows "
++        "per site x response-variable combination. For each such row, set `location` to that "
++        "site's own name/label and fill whichever of tillage_type_raw, fertilize_raw, "
++        "herbicide_raw, irrigation_raw, soil_texture_raw, latitude, longitude the paper gives "
++        "for THAT site specifically. Leave all of these null when the paper describes only one "
++        "site, or when a site-level value is not stated — the paper-wide value is used "
++        "automatically in that case, so do not repeat it here.\n"
++        "COVER CROP YEARS: for `cc_years_practiced`, list every calendar year cover cropping was "
++        "actually practiced in this row's experiment/site, comma-separated (e.g. \"2016,2017\"). "
++        "If the paper gives a start year plus a count of consecutive years, expand it into the "
++        "full list rather than just the start year.\n\n"
++        f"Gazetteer species found in the text (hints only, decide from the design):\n{cand_txt}\n\n"
++        f"Per-row fields to fill (null if the paper does not state it):\n"
++        f"{_field_descriptions(schema, UNIT_DESIGN_FIELDS + value_fields)}\n\n"
++        f"METHODS:\n{_truncate(methods_text, 30000)}\n\n"
++        f"RESULTS:\n{_truncate(results_text, 30000)}\n\n"
++        "Answer as JSON: {\"units\": [ {\"<field>\": {\"value\": ..., \"confidence\": \"high|medium|low\", "
++        "\"evidence\": \"<verbatim quote or table/figure ref>\"}, ... }, ... ], "
++        "\"design_summary\": \"<one sentence: factors x levels x years>\"}"
++    )
++    data = llm_client.chat_json(_SYSTEM_BASE, user, purpose="enumerate_experimental_units", cfg=cfg)
+ 
++    units: list[dict[str, ExtractedField]] = []
++    for raw_unit in data.get("units", []):
++        unit: dict[str, ExtractedField] = {}
++        for name, obj in raw_unit.items():
++            ef = _to_extracted(obj, "narrow_llm")
++            if ef is not None:
++                unit[name] = ef
++        if unit:
++            unit["_design_summary"] = ExtractedField(data.get("design_summary", ""), "high", "", "narrow_llm")
++            units.append(unit)
++    return units
+ 
+-# ═══════════════════════════ Step 6: Narrow LLM extraction ═══════════════
+-
+-def extract_narrow_llm(section_text: str, field_names: list[str], schema: dict) -> dict[str, ExtractedField]:
+-    """
+-    AGENTS.md step 6. ONE consolidated LLM call scoped to section_text
+-    only — never the full paper. field_names must be exactly the schema
+-    fields with extraction_method: narrow_llm not already filled by
+-    extract_deterministic, for the relevant block.
+ 
+-    For multi-year studies, the call must map each numeric value in the
+-    Results text to a specific year using the same value-cross-
+-    referencing logic used in the Book4.xlsx year extraction — never
+-    assign a whole year-range to every row indiscriminately.
++# ═══════════════════════════ Step 6b: Narrow LLM extraction ══════════════
+ 
+-    STUB — wire this to your model provider in the workflow script.
++def extract_narrow_llm(section_text: str, field_names: list[str], schema: dict, cfg=None,
++                       batch_size: int = 4) -> dict[str, ExtractedField]:
+     """
+-    raise NotImplementedError(
+-        "extract_narrow_llm: wire to your LLM provider in the workflow script. "
+-        f"Requested fields: {field_names}"
+-    )
++    AGENTS.md step 6b. Extracts the paper-level (shared) Block 1
++    narrow_llm fields not filled by extract_deterministic — country,
++    location, tillage_type_raw, fertilize_raw, irrigation_raw, soil
++    texture, rotation, ccs_year_duration, etc.
++
++    Split into batches of `batch_size` fields per call rather than one
++    call asking for everything at once: a reasoning model spends
++    completion-token budget on reasoning proportional to how many
++    things it's asked to juggle at once, and a 12-15-field single call
++    was observed (2026-09, nrp/glm-5 on AI Verde) to burn its entire
++    token budget on reasoning and time out before writing any answer.
++    Smaller batches finish reliably even on a slow/overloaded model
++    pool, at the cost of more (cheaper, faster) calls instead of one
++    slow one. One failed batch is logged and skipped — it never blocks
++    the other batches' fields.
++    """
++    from src import llm_client
++
++    if not field_names:
++        return {}
++    out: dict[str, ExtractedField] = {}
++    methods_text = _truncate(section_text, 30000)
++    batches = [field_names[i:i + batch_size] for i in range(0, len(field_names), batch_size)]
++    for batch in batches:
++        user = (
++            "Extract the following fields from the METHODS text of a cover crop field study. "
++            "Report each value verbatim as the paper states it (these are *_raw fields; do not "
++            "normalize). Use null when the text does not state it.\n\n"
++            f"Fields:\n{_field_descriptions(schema, batch)}\n\n"
++            f"METHODS:\n{methods_text}\n\n"
++            "Answer as JSON: {\"<field>\": {\"value\": ..., \"confidence\": \"high|medium|low\", "
++            "\"evidence\": \"<verbatim quote>\"}, ...}"
++        )
++        try:
++            data = llm_client.chat_json(_SYSTEM_BASE, user, purpose=f"extract_narrow_llm[{','.join(batch)}]", cfg=cfg)
++        except Exception as e:  # noqa: BLE001 — one bad batch must not lose the others
++            print(f"  [extract_narrow_llm] batch {batch} failed, skipping: {e!r}")
++            continue
++        for name in batch:
++            ef = _to_extracted(data.get(name), "narrow_llm")
++            if ef is not None:
++                out[name] = ef
++    return out
+ 
+ 
+ # ═══════════════════════════ Step 7: Vision extraction (figures only) ════
+ 
+-def extract_vision_llm(pdf_path: Path, page_number: int, field_names: list[str]) -> dict[str, ExtractedField]:
++def extract_vision_llm(pdf_path: Path, page_number: int, field_names: list[str],
++                       context: str = "", cfg=None, image_dir: Optional[Path] = None) -> dict[str, ExtractedField]:
+     """
+     AGENTS.md step 7. Only called when a Results value is explicitly
+-    figure-referenced (e.g. "as shown in Fig. 3") and
+-    extract_narrow_llm did not find it in text. Renders the given PDF
+-    page to an image (pure code — see render_page_to_image below), then
+-    makes ONE vision-capable LLM call scoped to that image.
++    figure-referenced (e.g. "as shown in Fig. 3") and step 6 did not
++    find it in text. Renders the given PDF page to an image (pure code)
++    then makes ONE vision call scoped to that image.
+ 
+-    RULE: every ExtractedField returned here must have
++    RULE: every ExtractedField returned here is capped at
+     confidence="medium" unless the figure prints an explicit numeric
+-    data label (then "high" is allowed). Never default to "high".
+-
+-    STUB — wire this to your model provider in the workflow script.
++    data label (the model must say so via "data_label": true).
+     """
+-    raise NotImplementedError(
+-        "extract_vision_llm: wire to your vision-capable model provider "
+-        f"in the workflow script. Page {page_number}, fields: {field_names}"
++    from src import llm_client
++
++    image_dir = Path(image_dir) if image_dir else Path(pdf_path).parent / "_pages"
++    png = render_page_to_image(Path(pdf_path), page_number, image_dir / f"{Path(pdf_path).stem}_p{page_number + 1}.png")
++    user = (
++        "Read the figure(s) on this page of a cover crop paper and report the requested values. "
++        "If a value must be estimated from bar/point height rather than a printed number, say so "
++        "(data_label=false). Use null when the figure does not show it.\n"
++        f"Context: {context}\n\n"
++        f"Fields: {field_names}\n\n"
++        "Answer as JSON: {\"<field>\": {\"value\": ..., \"confidence\": \"high|medium|low\", "
++        "\"evidence\": \"<panel / axis / legend read>\", \"data_label\": true|false}, ...}"
+     )
++    data = llm_client.chat_json(_SYSTEM_BASE, user, purpose="extract_vision_llm", cfg=cfg, image_png_path=png)
++    out: dict[str, ExtractedField] = {}
++    for name in field_names:
++        obj = data.get(name)
++        cap = None if (isinstance(obj, dict) and obj.get("data_label") is True) else "medium"
++        ef = _to_extracted(obj, "vision_llm", cap=cap)
++        if ef is not None:
++            out[name] = ef
++    return out
+ 
+ 
+ def render_page_to_image(pdf_path: Path, page_number: int, output_path: Path, dpi: int = 200) -> Path:
+@@ -408,10 +673,17 @@ def render_page_to_image(pdf_path: Path, page_number: int, output_path: Path, dp
+ # encountered; only fall back to an LLM call (not implemented here) for
+ # text this table doesn't cover.
+ NORM_RULES: dict[str, dict[str, str]] = {
+-    "fertilize_norm": {"yes": "Yes", "no": "No", "0": "No"},
++    "fertilize_norm": {"yes": "Yes", "no": "No", "0": "No", "none": "No", "fertilized": "Yes", "unfertilized": "No"},
+     "irrigation_norm": {
+         "yes": "Irrigated", "irrrigated": "Irrigated", "irrigated": "Irrigated",
+-        "no": "Rainfed", "rainfall": "Rainfed", "null": "Unknown",
++        "no": "Rainfed", "rainfall": "Rainfed", "rainfed": "Rainfed", "rain-fed": "Rainfed",
++        "null": "Unknown", "none": "Rainfed",
++    },
++    "herbicide_norm": {"yes": "Yes", "no": "No", "none": "No", "glyphosate": "Yes"},
++    "tillage_type_norm": {
++        "no-till": "NT", "no till": "NT", "nt": "NT", "zero tillage": "NT",
++        "conventional tillage": "CT", "conventional": "CT", "ct": "CT", "moldboard plow": "CT",
++        "reduced tillage": "RT", "reduced": "RT", "rt": "RT", "minimum tillage": "RT", "strip-till": "RT",
+     },
+ }
+ 
+@@ -421,7 +693,7 @@ def normalize_fields(extracted: dict[str, ExtractedField], schema: dict) -> dict
+     AGENTS.md step 8. For every schema field with a _raw/_norm pair,
+     produces the _norm value via NORM_RULES. Trims/lowercases for
+     matching only — the stored _raw value is left untouched (see
+-    schema header: raw vs norm design principle).
++    schema header: raw vs norm design principle). Runs per ROW.
+     """
+     normalized: dict[str, ExtractedField] = {}
+     for norm_name, rule_table in NORM_RULES.items():
+@@ -432,41 +704,77 @@ def normalize_fields(extracted: dict[str, ExtractedField], schema: dict) -> dict
+                 normalized[norm_name] = ExtractedField(
+                     rule_table[raw_val], "high", f"rule match on raw value '{raw_val}'", "computed_downstream"
+                 )
+-    # grain_crop_norm: trim/case-fix only, no category remap needed
+-    if "grain_crop_raw" in extracted:
+-        cleaned = str(extracted["grain_crop_raw"].value).strip()
+-        if cleaned:
+-            normalized["grain_crop_norm"] = ExtractedField(
+-                cleaned, "high", "trimmed from grain_crop_raw", "computed_downstream"
+-            )
++    for raw_name, norm_name in (("grain_crop_raw", "grain_crop_norm"),
++                                ("cc_rotation_raw", "cc_rotation_norm"),
++                                ("grain_crop_rotation_raw", "grain_crop_rotation_norm"),
++                                ("soil_texture_raw", "soil_texture_norm")):
++        if raw_name in extracted and norm_name not in normalized:
++            cleaned = str(extracted[raw_name].value).strip()
++            if cleaned:
++                normalized[norm_name] = ExtractedField(cleaned, "medium", f"trimmed from {raw_name} (no vocabulary rule yet)", "computed_downstream")
+     return normalized
+ 
+ 
+ # ═══════════════════════════ Step 9: Response ratios (pure math) ═════════
+ 
+-RESPONSE_BLOCK_PREFIXES = ["yield_", "ghg_co2_", "ghg_n2o_", "ghg_ch4_", "soc_", "nitrogen_"]
++RESPONSE_BLOCK_PREFIXES = ["yield_", "ghg_", "soc_", "nitrogen_"]
++
++
++def _num(x) -> Optional[float]:
++    try:
++        v = float(x)
++        return v if math.isfinite(v) else None
++    except (TypeError, ValueError):
++        return None
+ 
+ 
+ def compute_response_ratios(row: dict[str, ExtractedField]) -> dict[str, ExtractedField]:
+     """
+-    AGENTS.md step 9. Pure math, no LLM. For every Block 2 sub-block
+-    prefix with both {prefix}cc_mean and {prefix}control_mean present
+-    and positive, computes {prefix}ln_response_ratio =
+-    ln(cc_mean / control_mean). Variance fields (var_lnr and friends)
+-    are not computed here — wire the specific SD-based formula your
+-    meta-analysis uses (see schema.yml comments on the yield block's
+-    legacy multi-method variance fields) in the workflow script.
++    AGENTS.md step 9. Pure math, no LLM, per ROW. For every Block 2
++    sub-block prefix with both {prefix}cc_mean and {prefix}control_mean
++    present and positive: ln_response_ratio = ln(cc/control). When both
++    SDs and n are also present: var_lnr = sd_cc^2/(n*cc^2) +
++    sd_ctrl^2/(n*ctrl^2) (Hedges et al. 1999, equal n). The legacy yield
++    variants (var_lnr_uniformed / _harmonic_n / _all_ave) are NOT
++    computed here — they depend on the SD-imputation history of the
++    source file and belong to the downstream stats script.
+     """
+     computed: dict[str, ExtractedField] = {}
+     for prefix in RESPONSE_BLOCK_PREFIXES:
+-        cc_key, ctrl_key = f"{prefix}cc_mean", f"{prefix}control_mean"
+-        if cc_key in row and ctrl_key in row:
+-            cc_val, ctrl_val = row[cc_key].value, row[ctrl_key].value
+-            if cc_val is not None and ctrl_val is not None and cc_val > 0 and ctrl_val > 0:
+-                lnr = math.log(cc_val / ctrl_val)
+-                computed[f"{prefix}ln_response_ratio"] = ExtractedField(
+-                    lnr, "high", f"computed: ln({cc_key}/{ctrl_key})", "computed_downstream"
+-                )
++        cc = _num(row[f"{prefix}cc_mean"].value) if f"{prefix}cc_mean" in row else None
++        ctrl = _num(row[f"{prefix}control_mean"].value) if f"{prefix}control_mean" in row else None
++        if cc is None or ctrl is None or cc <= 0 or ctrl <= 0:
++            continue
++        computed[f"{prefix}ln_response_ratio"] = ExtractedField(
++            math.log(cc / ctrl), "high", f"computed: ln({prefix}cc_mean/{prefix}control_mean)", "computed_downstream"
++        )
++        if prefix == "yield_":
++            continue
++        sd_cc = _num(row[f"{prefix}cc_sd"].value) if f"{prefix}cc_sd" in row else None
++        sd_ct = _num(row[f"{prefix}control_sd"].value) if f"{prefix}control_sd" in row else None
++        n = _num(row[f"{prefix}n"].value) if f"{prefix}n" in row else None
++        if sd_cc is not None and sd_ct is not None and n and n > 0:
++            var = sd_cc ** 2 / (n * cc ** 2) + sd_ct ** 2 / (n * ctrl ** 2)
++            computed[f"{prefix}var_lnr"] = ExtractedField(var, "high", "computed: Hedges lnRR variance, equal n", "computed_downstream")
++    return computed
++
++
++def compute_cc_duration(row: dict[str, ExtractedField]) -> dict[str, ExtractedField]:
++    """
++    Pure math, no LLM, per ROW. cc_duration_years = count of distinct
++    calendar years in cc_years_practiced (e.g. "2016,2017" -> 2). Counting
++    distinct years rather than (max - min + 1) also handles a
++    non-continuous list correctly (e.g. "2016,2018" -> 2, not 3).
++    """
++    computed: dict[str, ExtractedField] = {}
++    ef = row.get("cc_years_practiced")
++    if ef is None or not str(ef.value).strip():
++        return computed
++    years = {y.strip() for y in re.split(r"[,;/&]| and ", str(ef.value)) if y.strip()}
++    if years:
++        computed["cc_duration_years"] = ExtractedField(
++            len(years), "high", f"computed: distinct years in cc_years_practiced ('{ef.value}')", "computed_downstream"
++        )
+     return computed
+ 
+ 
+@@ -476,39 +784,63 @@ def validate_with_apis(row: dict[str, ExtractedField], data_catalog: dict) -> li
+     """
+     AGENTS.md step 10. Species-name and coordinate/country cross-checks
+     against the external APIs in data_catalog.yml. Returns a list of
+-    flag messages for anything that didn't validate cleanly — an empty
+-    list means nothing was flagged (not that nothing was checked; check
+-    the flags list is genuinely populated in your implementation).
++    flag messages for anything that didn't validate cleanly.
+ 
+-    STUB — the external_apis in data_catalog.yml are not reachable from
+-    a sandboxed chat container. Wire this in an environment with open
+-    network access (e.g. CyVerse).
++    STUB — external validation is wired in a later task. Until then,
++    sanity_check_row() below provides the offline numeric checks.
+     """
+     raise NotImplementedError(
+         "validate_with_apis: requires network access to GBIF/WFO/GeoNames/"
+-        "Nominatim (see data_catalog.yml) — not available in a sandboxed "
+-        "chat container. Run on CyVerse, or call these one at a time "
+-        "through the chat's own web_fetch tool for prototyping."
++        "Nominatim (see data_catalog.yml). Not yet wired — use sanity_check_row()."
+     )
+ 
+ 
+-# ═══════════════════════════ Step 11: Assemble row ════════════════════════
++def sanity_check_row(row: dict[str, ExtractedField]) -> list[str]:
++    """Offline numeric / consistency checks for one row. Returns flags."""
++    flags: list[str] = []
++    lat = _num(row["latitude"].value) if "latitude" in row else None
++    lon = _num(row["longitude"].value) if "longitude" in row else None
++    if lat is not None and not -90 <= lat <= 90:
++        flags.append(f"latitude out of range: {lat}")
++    if lon is not None and not -180 <= lon <= 180:
++        flags.append(f"longitude out of range: {lon}")
++    for prefix in RESPONSE_BLOCK_PREFIXES:
++        for side in ("cc", "control"):
++            m = _num(row[f"{prefix}{side}_mean"].value) if f"{prefix}{side}_mean" in row else None
++            sd = _num(row[f"{prefix}{side}_sd"].value) if f"{prefix}{side}_sd" in row else None
++            if m is not None and sd is not None and sd > 3 * abs(m) and m != 0:
++                flags.append(f"{prefix}{side}_sd ({sd}) > 3x mean ({m}) — check units / SE vs SD")
++            if prefix == "yield_" and m is not None and m < 0:
++                flags.append(f"negative yield: {prefix}{side}_mean={m}")
++    if "gas_type" in row and str(row["gas_type"].value).lower() not in ("co2", "n2o", "ch4"):
++        flags.append(f"gas_type not in vocabulary: {row['gas_type'].value}")
++    if any(k.startswith("ghg_") and k.endswith("_mean") for k in row) and "gas_type" not in row:
++        flags.append("ghg values present but gas_type missing")
++    return flags
++
++
++# ═══════════════════════════ Step 11: Assemble rows ═══════════════════════
+ 
+-def assemble_row(paper: PaperSpec, all_fields: dict[str, ExtractedField], schema: dict) -> dict:
++_SKIP_STATUS = ("dropped", "proposed_new", "needs_confirmation")
++
++
++def assemble_row(paper: PaperSpec, all_fields: dict[str, ExtractedField], schema: dict,
++                 include_proposed: bool = False, extra: Optional[dict] = None) -> dict:
+     """
+-    AGENTS.md step 11. Merges every stage's output into one row matching
+-    the schema's field order. Fields with status "dropped",
+-    "proposed_new", or "needs_confirmation" are never populated (see
+-    schema.yml open_questions — proposed_new fields wait for explicit
+-    user confirmation before the pipeline starts filling them). Any
+-    field not present in all_fields is left blank — never fabricated.
++    AGENTS.md step 11 (single row). Merges every stage's output into one
++    row matching the schema's field order. Fields with status "dropped",
++    "proposed_new" (unless include_proposed=True), or
++    "needs_confirmation" are never populated. Any field not present in
++    all_fields is left blank — never fabricated. Internal keys (leading
++    underscore, or *_candidates) are never written.
+     """
+     row: dict = {"pdf_path": str(paper.pdf_path), "paper_id": paper.paper_id}
++    row.update(extra or {})
+     for category_fields in schema["fields"].values():
+         for field_def in category_fields:
+             name = field_def["name"]
+             status = field_def.get("status")
+-            if status in ("dropped", "proposed_new", "needs_confirmation"):
++            if status in _SKIP_STATUS and not (include_proposed and status == "proposed_new"):
+                 continue
+             if name in all_fields:
+                 ef = all_fields[name]
+@@ -516,64 +848,173 @@ def assemble_row(paper: PaperSpec, all_fields: dict[str, ExtractedField], schema
+                 if field_def.get("extraction_method") != "computed_downstream":
+                     row[f"{name}_confidence"] = ef.confidence
+                     row[f"{name}_source"] = ef.source
+-            else:
++            elif name not in row:
++                # Don't clobber identity fields already set above (pdf_path,
++                # paper_id) just because they're ALSO listed in the schema
++                # (e.g. paper_id: extraction_method manual_existing — it
++                # comes from PaperSpec, never from all_fields). Any other
++                # schema field genuinely not extracted still gets an
++                # explicit None, as before.
+                 row[name] = None
+     return row
+ 
+ 
+-# ═══════════════════════════ Step 12: Orchestrator ════════════════════════
+-
+-def run_extraction(workflow: ExtractionWorkflow) -> list[dict]:
++def assemble_rows(paper: PaperSpec, shared_fields: dict[str, ExtractedField],
++                  units: list[dict[str, ExtractedField]], schema: dict,
++                  include_proposed: bool = False) -> list[dict]:
+     """
+-    Top-level orchestrator for AGENTS.md steps 1-4, 8-9, 11 (the
+-    pure-code stages). Steps 5-7 and 10 (LLM/vision/API calls) are
+-    NotImplementedError stubs above — a real workflow script wires
+-    those in per-paper before calling assemble_row, or subclasses this
+-    orchestration. One failed paper is logged and skipped; it never
+-    halts the batch (AGENTS.md: Failure Handling).
++    AGENTS.md step 11 (multi-row). shared_fields = paper-level Block 1
++    values (coordinates, country, tillage, ...). units = output of
++    enumerate_experimental_units(). For each unit: merge shared + unit
++    (unit wins on conflict), run normalize_fields() and
++    compute_response_ratios() per row, then assemble. With an empty
++    units list one row with the shared fields only is produced, so a
++    paper is never silently lost.
+     """
+-    schema = load_schema(workflow.schema_path)
+-    data_catalog = load_data_catalog(workflow.data_catalog_path)
+     rows: list[dict] = []
++    unit_list = units or [{}]
++    for i, unit in enumerate(unit_list, start=1):
++        merged: dict[str, ExtractedField] = {**shared_fields, **{k: v for k, v in unit.items() if not k.startswith("_")}}
++        merged.update(normalize_fields(merged, schema))
++        merged.update(compute_response_ratios(merged))
++        merged.update(compute_cc_duration(merged))
++        flags = sanity_check_row(merged)
++        extra = {"unit_index": i, "n_units_in_paper": len(unit_list), "review_flags": "; ".join(flags) or None}
++        rows.append(assemble_row(paper, merged, schema, include_proposed=include_proposed, extra=extra))
++    return rows
+ 
+-    for paper in workflow.papers:
+-        ok, msg = check_pdf_readable(paper.pdf_path)
+-        if not ok:
+-            if workflow.verbose:
+-                print(f"SKIP {paper.pdf_path}: {msg}")
+-            continue
+ 
+-        markdown_text, ident = pdf_to_markdown(paper.pdf_path)
+-        sections = locate_sections(markdown_text)
++# ═══════════════════════════ Step 12: Orchestrator ════════════════════════
++
++SHARED_NARROW_FIELDS = [
++    "country", "location", "ccs_year_duration", "cc_rotation_raw", "grain_crop_rotation_raw",
++    "tillage_type_raw", "fertilize_raw", "grain_crop_n_rate_raw", "herbicide_raw", "irrigation_raw",
++    "soil_texture_raw", "annual_precipitation_mm", "annual_temperature_c", "notes",
++]
++
++
++def extract_paper(paper: PaperSpec, schema: dict, data_catalog: dict, *, use_llm: bool = True,
++                  include_proposed: bool = False, cfg=None, verbose: bool = True) -> tuple[list[dict], dict]:
++    """
++    Runs steps 1-11 for ONE paper and returns (rows, report). report
++    holds the intermediate signals (sections found, species candidates,
++    response types, design summary, LLM call log slice) for the
++    PROMPT_ACTION_LOG entry and for human review.
++    """
++    from src import llm_client
++
++    report: dict = {"pdf": str(paper.pdf_path), "status": "ok", "notes": []}
++    ok, msg = check_pdf_readable(paper.pdf_path)
++    if not ok:
++        report.update(status="skipped", notes=[msg])
++        return [], report
++
++    if verbose:
++        print(f"[{Path(paper.pdf_path).name}] converting PDF to markdown...", flush=True)
++    markdown_text, ident = pdf_to_markdown(paper.pdf_path)
++    sections = locate_sections(markdown_text)
++    report["fallback_used"] = sections["fallback_used"]
++    report["methods_chars"] = len(sections["methods"] or "")
++    report["results_chars"] = len(sections["results"] or "")
++    if verbose:
++        print(f"[{Path(paper.pdf_path).name}] sections located: "
++             f"methods={report['methods_chars']} chars, results={report['results_chars']} chars, "
++             f"fallback={sections['fallback_used']}", flush=True)
++
++    shared: dict[str, ExtractedField] = {}
++    if ident.get("doi"):
++        shared["doi"] = ExtractedField(ident["doi"], "high", "regex match on PDF page 1", "regex")
++    if ident.get("article_title"):
++        shared["article_title"] = ExtractedField(ident["article_title"], "medium", "PDF metadata title field", "regex")
++
++    methods_text = sections["methods"] or ""
++    shared.update(extract_deterministic(methods_text, data_catalog))
++    candidates = shared.pop("cc_species_candidates").value
++    report["species_candidates"] = candidates
++
++    if sections["fallback_used"] == "full_text":
++        for ef in shared.values():
++            ef.confidence = "low"
++        report["notes"].append("no Methods heading found — full-text fallback, Block 1 capped at low")
++
++    units: list[dict[str, ExtractedField]] = []
++    if use_llm:
++        log_start = len(llm_client.CALL_LOG)
++        abstract_match = ABSTRACT_HEADING_PATTERN.search(markdown_text)
++        abstract_text = _span_from_heading(markdown_text, abstract_match) if abstract_match else markdown_text[:4000]
++
++        if verbose:
++            print(f"[{Path(paper.pdf_path).name}] stage 1/3: classify_response_type...", flush=True)
++        rt = classify_response_type(abstract_text, sections["results"], cfg=cfg)
++        shared["response_types_detected"] = rt
++        response_types = [t for t in rt.value.split(",") if t]
++        report["response_types"] = response_types
++        if verbose:
++            print(f"[{Path(paper.pdf_path).name}] response_types_detected={response_types}", flush=True)
++
++        missing = [f for f in SHARED_NARROW_FIELDS if f not in shared]
++        if verbose:
++            print(f"[{Path(paper.pdf_path).name}] stage 2/3: extract_narrow_llm "
++                 f"({len(missing)} shared Block 1 fields)...", flush=True)
++        shared.update(extract_narrow_llm(methods_text, missing, schema, cfg=cfg))
++
++        if response_types:
++            if verbose:
++                print(f"[{Path(paper.pdf_path).name}] stage 3/3: enumerate_experimental_units...", flush=True)
++            units = enumerate_experimental_units(methods_text, sections["results"], candidates,
++                                                 response_types, schema, cfg=cfg)
++            if units:
++                report["design_summary"] = units[0].get("_design_summary", ExtractedField("", "", "", "")).value
++        else:
++            report["notes"].append("no supported response type detected — Block 2 left blank")
++        report["llm_calls"] = llm_client.CALL_LOG[log_start:]
++    else:
++        report["notes"].append("use_llm=False — only deterministic fields extracted")
+ 
+-        all_fields: dict[str, ExtractedField] = {}
+-        if ident.get("doi"):
+-            all_fields["doi"] = ExtractedField(ident["doi"], "high", "regex match on PDF page 1", "regex")
+-        if ident.get("article_title"):
+-            all_fields["article_title"] = ExtractedField(
+-                ident["article_title"], "medium", "PDF metadata title field", "regex"
+-            )
++    rows = assemble_rows(paper, shared, units, schema, include_proposed=include_proposed)
++    report["n_rows"] = len(rows)
++    if verbose:
++        print(f"{Path(paper.pdf_path).name}: {len(rows)} row(s); response_types={report.get('response_types')}; "
++              f"candidates={[c['matched_name'] for c in candidates]}")
++    return rows, report
+ 
+-        if sections["methods"]:
+-            all_fields.update(extract_deterministic(sections["methods"], data_catalog))
+-            # extract_narrow_llm(...) for the remaining Block 1 fields —
+-            # wire in your workflow script.
+ 
+-        # classify_response_type(...) then extract_narrow_llm(...) /
+-        # extract_vision_llm(...) for Block 2 — wire in your workflow
+-        # script; not called here since they require a model provider.
++def run_extraction(workflow: ExtractionWorkflow, *, use_llm: bool = True,
++                   include_proposed: bool = False, cfg=None) -> list[dict]:
++    """
++    Top-level orchestrator: extract_paper() for every PaperSpec, then
++    write. One failed paper is logged and skipped; it never halts the
++    batch (AGENTS.md: Failure Handling). Reports are written next to the
++    CSV as <name>_report.json.
++    """
++    import json
+ 
+-        all_fields.update(normalize_fields(all_fields, schema))
+-        all_fields.update(compute_response_ratios(all_fields))
++    schema = load_schema(workflow.schema_path)
++    data_catalog = load_data_catalog(workflow.data_catalog_path)
++    rows: list[dict] = []
++    reports: list[dict] = []
+ 
+-        row = assemble_row(paper, all_fields, schema)
+-        if sections["fallback_used"] == "full_text" and workflow.verbose:
+-            print(f"NOTE {paper.pdf_path}: no Methods heading found, used full-text fallback — "
+-                  f"Block 1 fields on this row should be capped at low confidence.")
+-        rows.append(row)
++    for paper in workflow.papers:
++        try:
++            paper_rows, report = extract_paper(paper, schema, data_catalog, use_llm=use_llm,
++                                               include_proposed=include_proposed, cfg=cfg,
++                                               verbose=workflow.verbose)
++        except Exception as e:  # noqa: BLE001 — never halt the batch
++            report = {"pdf": str(paper.pdf_path), "status": "failed", "notes": [repr(e)[:500]]}
++            paper_rows = []
++            if workflow.verbose:
++                print(f"FAILED {paper.pdf_path}: {e!r}")
++        rows.extend(paper_rows)
++        reports.append(report)
+ 
+     if workflow.output_dir:
+-        out_path = _write_output(rows, workflow.output_dir, workflow.name)
++        out_path = Path(workflow.output_dir) / f"{workflow.name}.csv"
++        if rows:
++            out_path = _write_output(rows, workflow.output_dir, workflow.name)
++        elif workflow.verbose:
++            print(f"NOTE: no rows extracted — leaving {out_path} untouched")
++        with open(Path(workflow.output_dir) / f"{workflow.name}_report.json", "w", encoding="utf-8") as f:
++            json.dump(reports, f, indent=2, default=str)
+         if workflow.verbose:
+             print(f"Wrote {len(rows)} row(s) to {out_path}")
+ 
+@@ -581,7 +1022,14 @@ def run_extraction(workflow: ExtractionWorkflow) -> list[dict]:
+ 
+ 
+ def _write_output(rows: list[dict], output_dir: Path, name: str) -> Path:
+-    """Append rows to workflows/<project>/output/<name>.csv."""
++    """
++    Append rows to workflows/<project>/output/<name>.csv. Never called
++    with an empty rows list (see run_extraction) — an empty DataFrame has
++    no columns and would silently produce a 0-byte-effective CSV that
++    breaks the NEXT run's read below. A pre-existing file that fails to
++    parse (empty, truncated by a prior crash) is treated as absent rather
++    than raised, so one bad file never blocks a fresh run.
++    """
+     import pandas as pd
+ 
+     output_dir = Path(output_dir)
+@@ -590,7 +1038,10 @@ def _write_output(rows: list[dict], output_dir: Path, name: str) -> Path:
+ 
+     df = pd.DataFrame(rows)
+     if out_path.exists():
+-        existing = pd.read_csv(out_path)
+-        df = pd.concat([existing, df], ignore_index=True)
++        try:
++            existing = pd.read_csv(out_path)
++            df = pd.concat([existing, df], ignore_index=True)
++        except pd.errors.EmptyDataError:
++            pass  # prior run left an empty/corrupt file — start fresh
+     df.to_csv(out_path, index=False)
+     return out_path
+diff --git a/src/llm_client.py b/src/llm_client.py
+new file mode 100644
+index 0000000..fd8d1f8
+--- /dev/null
++++ b/src/llm_client.py
+@@ -0,0 +1,270 @@
++"""
++llm_client.py — thin wrapper around an OpenAI-compatible chat endpoint.
++
++The judgment steps of the pipeline (classify response type, enumerate
++experimental units, narrow extraction, figure reading) call the model
++THROUGH THIS MODULE ONLY. Nothing else in src/ talks to a model.
++
++Configuration is read from environment variables so the same code runs
++on CyVerse (AI Verde gateway, Claude-series models) or anywhere else
++with an OpenAI-compatible API:
++
++    OPENAI_API_KEY   required — the gateway / provider key
++    LLM_API_BASE     default: https://llm-api.cyverse.ai/v1
++    LLM_MODEL        default: see DEFAULT_MODEL below
++    LLM_VISION_MODEL default: same as LLM_MODEL
++
++Every call is logged (model, purpose, token usage) to the module-level
++CALL_LOG list so a workflow script can append it to PROMPT_ACTION_LOG.md.
++"""
++
++from __future__ import annotations
++
++import base64
++import json
++import os
++import re
++import time
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Optional
++
++DEFAULT_API_BASE = "https://llm-api.cyverse.ai/v1"
++DEFAULT_MODEL = os.environ.get("LLM_MODEL", "anthropic/claude-sonnet-4")
++
++CALL_LOG: list[dict] = []
++
++
++@dataclass
++class LLMConfig:
++    api_key: Optional[str] = None
++    api_base: str = DEFAULT_API_BASE
++    model: str = DEFAULT_MODEL
++    vision_model: Optional[str] = None
++    temperature: float = 0.0
++    max_tokens: int = 8000
++    max_tokens_cap: int = 24000
++    max_retries: int = 4
++    request_timeout: float = 180.0
++    extra: dict = field(default_factory=dict)
++
++    @classmethod
++    def from_env(cls) -> "LLMConfig":
++        extra: dict = {}
++        # Some reasoning-model deployments (observed on nrp/glm-5 via AI
++        # Verde) accept this Qwen/GLM-style flag to skip chain-of-thought
++        # entirely — a ~50x speedup on that model — but it is NOT a
++        # standard OpenAI param and other models/deployments on the same
++        # gateway may reject an unrecognized extra_body key. Opt in per
++        # model with LLM_DISABLE_THINKING=1 rather than defaulting it on.
++        # parse_json_response() handles either style of reply either way
++        # (reasoning in its own field, or chain-of-thought text ahead of
++        # the real JSON in content), so this is purely a speed knob.
++        if os.environ.get("LLM_DISABLE_THINKING", "").lower() in ("1", "true", "yes"):
++            extra["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
++        return cls(
++            api_key=os.environ.get("OPENAI_API_KEY"),
++            api_base=os.environ.get("LLM_API_BASE", DEFAULT_API_BASE),
++            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
++            vision_model=os.environ.get("LLM_VISION_MODEL"),
++            extra=extra,
++        )
++
++
++class LLMNotConfigured(RuntimeError):
++    """Raised when a judgment step is reached but no API key is set."""
++
++
++def _client(cfg: LLMConfig):
++    try:
++        from openai import OpenAI
++    except ImportError as e:  # pragma: no cover
++        raise ImportError("openai package not installed — pip install openai") from e
++    if not cfg.api_key:
++        raise LLMNotConfigured(
++            "OPENAI_API_KEY is not set. Export your AI Verde (or other OpenAI-"
++            "compatible) key before running the LLM stages of the pipeline."
++        )
++    return OpenAI(api_key=cfg.api_key, base_url=cfg.api_base, timeout=cfg.request_timeout, max_retries=0)
++
++
++def _strip_code_fence(text: str) -> str:
++    text = text.strip()
++    m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
++    return m.group(1) if m else text
++
++
++def _iter_balanced_json_candidates(text: str):
++    """
++    Yield every top-level {...} or [...] substring of text whose braces
++    are actually balanced (respecting string literals and escapes), in
++    the order they appear. Needed because some reasoning-model
++    deployments (e.g. GLM with thinking disabled via extra_body) put
++    their chain-of-thought directly in the answer content ahead of the
++    real JSON, rather than in a separate reasoning_content field —
++    "first '{' to last '}'" then spans the prose in between and never
++    parses. Scanning for genuinely balanced blocks and trying them
++    LAST-FIRST (the real answer is usually what the model settles on at
++    the end) finds the real payload regardless of which style a given
++    deployment uses.
++    """
++    candidates = []
++    depth = 0
++    start = None
++    in_string = False
++    escape = False
++    opener = closer = None
++    for i, ch in enumerate(text):
++        if start is None:
++            if ch in "{[":
++                start, opener = i, ch
++                closer = "}" if ch == "{" else "]"
++                depth = 1
++                in_string = False
++                escape = False
++            continue
++        if in_string:
++            if escape:
++                escape = False
++            elif ch == "\\":
++                escape = True
++            elif ch == '"':
++                in_string = False
++            continue
++        if ch == '"':
++            in_string = True
++        elif ch == opener:
++            depth += 1
++        elif ch == closer:
++            depth -= 1
++            if depth == 0:
++                candidates.append(text[start:i + 1])
++                start = None
++    return candidates
++
++
++def parse_json_response(text: str):
++    """Parse a JSON object/array from a model reply, tolerating code
++    fences, leading/trailing prose, and chain-of-thought text that
++    precedes the real JSON in `text` itself (see
++    _iter_balanced_json_candidates). Tries candidates last-to-first
++    since the real answer is usually the one the model produces after
++    any reasoning. Raises ValueError if nothing parseable is found."""
++    cleaned = _strip_code_fence(text)
++    try:
++        return json.loads(cleaned)
++    except json.JSONDecodeError:
++        pass
++    candidates = _iter_balanced_json_candidates(cleaned)
++    for candidate in reversed(candidates):
++        try:
++            return json.loads(candidate)
++        except json.JSONDecodeError:
++            continue
++    raise ValueError(f"Model reply was not valid JSON:\n{text[:500]}")
++
++
++def chat(
++    system: str,
++    user: str,
++    *,
++    purpose: str,
++    cfg: Optional[LLMConfig] = None,
++    image_png_path: Optional[Path] = None,
++    json_mode: bool = True,
++    verbose: bool = True,
++) -> str:
++    """
++    One chat-completion call. Returns the assistant text. If
++    image_png_path is given the user turn carries the image (vision call)
++    and cfg.vision_model (or cfg.model) is used. Prints a one-line
++    progress note before/after each attempt (verbose=True, the default)
++    so a long-running batch never looks hung — every call also has a
++    hard cfg.request_timeout so a slow/overloaded model pool fails
++    instead of blocking forever.
++    """
++    cfg = cfg or LLMConfig.from_env()
++    client = _client(cfg)
++    model = (cfg.vision_model or cfg.model) if image_png_path else cfg.model
++    if verbose:
++        print(f"  [llm] {purpose}: calling {model} (timeout={cfg.request_timeout:.0f}s)...", flush=True)
++
++    if image_png_path:
++        b64 = base64.b64encode(Path(image_png_path).read_bytes()).decode("ascii")
++        user_content = [
++            {"type": "text", "text": user},
++            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
++        ]
++    else:
++        user_content = user
++
++    messages = [
++        {"role": "system", "content": system},
++        {"role": "user", "content": user_content},
++    ]
++
++    last_err: Optional[Exception] = None
++    cur_max_tokens = cfg.max_tokens
++    for attempt in range(1, cfg.max_retries + 1):
++        t0 = time.time()
++        try:
++            resp = client.chat.completions.create(
++                model=model,
++                messages=messages,
++                temperature=cfg.temperature,
++                max_tokens=cur_max_tokens,
++                **cfg.extra,
++            )
++            choice = resp.choices[0]
++            text = choice.message.content or ""
++            reasoning = getattr(choice.message, "reasoning_content", None)
++            usage = getattr(resp, "usage", None)
++            CALL_LOG.append({
++                "purpose": purpose,
++                "model": model,
++                "attempt": attempt,
++                "seconds": round(time.time() - t0, 2),
++                "finish_reason": getattr(choice, "finish_reason", None),
++                "max_tokens_used": cur_max_tokens,
++                "prompt_tokens": getattr(usage, "prompt_tokens", None),
++                "completion_tokens": getattr(usage, "completion_tokens", None),
++                "reasoning_chars": len(reasoning) if reasoning else 0,
++                "image": str(image_png_path) if image_png_path else None,
++            })
++            if verbose:
++                print(f"  [llm] {purpose}: got reply in {time.time() - t0:.1f}s "
++                     f"(finish={getattr(choice, 'finish_reason', None)}, "
++                     f"{getattr(usage, 'completion_tokens', '?')} completion tokens, "
++                     f"{len(reasoning) if reasoning else 0} reasoning chars)", flush=True)
++            # Reasoning models (GLM/Qwen-thinking/...) spend completion
++            # tokens on reasoning_content before writing the real answer —
++            # a truncated response ("length") with empty content means the
++            # budget ran out during reasoning, not that the model refused.
++            # Double the budget and retry rather than treating it as a
++            # transient provider error.
++            if not text.strip() and getattr(choice, "finish_reason", None) == "length":
++                if cur_max_tokens < cfg.max_tokens_cap:
++                    cur_max_tokens = min(cur_max_tokens * 2, cfg.max_tokens_cap)
++                    last_err = RuntimeError(
++                        f"empty content, finish_reason=length at max_tokens={cur_max_tokens // 2} "
++                        f"(reasoning used {len(reasoning) if reasoning else 0} chars) — retrying with {cur_max_tokens}"
++                    )
++                    continue
++            if json_mode:
++                parse_json_response(text)  # validate; raise -> retry
++            return text
++        except Exception as e:  # noqa: BLE001 — retry any provider/parse error
++            last_err = e
++            CALL_LOG.append({"purpose": purpose, "model": model, "attempt": attempt, "error": repr(e)[:300]})
++            if verbose:
++                print(f"  [llm] {purpose}: attempt {attempt} failed after {time.time() - t0:.1f}s: {e!r}", flush=True)
++            time.sleep(min(2 ** attempt, 10))
++    raise RuntimeError(f"LLM call '{purpose}' failed after {cfg.max_retries} attempts "
++                       f"(max_tokens up to {cur_max_tokens}): {last_err!r}")
++
++
++def chat_json(system: str, user: str, *, purpose: str, cfg: Optional[LLMConfig] = None,
++              image_png_path: Optional[Path] = None):
++    """chat() + parse_json_response()."""
++    return parse_json_response(chat(system, user, purpose=purpose, cfg=cfg,
++                                    image_png_path=image_png_path, json_mode=True))
+diff --git a/tests/test_geolocation.py b/tests/test_geolocation.py
+new file mode 100644
+index 0000000..93a9d91
+--- /dev/null
++++ b/tests/test_geolocation.py
+@@ -0,0 +1,125 @@
++"""Unit tests for src/geolocation.py — the point -> polygon tiered
++geolocation stage. All tests use synthetic registry/CSB entries (plain
++dicts + shapely geometries), so no geopandas/fiona/network/real CyVerse
++data is needed."""
++
++import json
++import sys
++from pathlib import Path
++
++from shapely.geometry import Polygon
++
++sys.path.insert(0, str(Path(__file__).parent.parent))
++
++from src.geolocation import (  # noqa: E402
++    match_csb_polygon,
++    match_station_name,
++    resolve_all_sites,
++    resolve_site_geometry,
++)
++
++NDSU_FARM = {
++    "key": "NDSU Horticulture Research Farm",
++    "names": ["NDSU Horticulture Research Farm", "Horticulture Research Farm", "Absaraka Farm"],
++    "geometry": Polygon([(-97.36, 46.98), (-97.34, 46.98), (-97.34, 47.00), (-97.36, 47.00)]),
++    "precision_tier": "S",
++    "boundary_source": "manual QGIS digitize, 2026-09",
++}
++
++MANDAN_FARM = {
++    "key": "USDA-ARS Northern Great Plains Research Lab",
++    "names": ["USDA-ARS Northern Great Plains Research Lab", "Mandan", "West Fargo site"],
++    "geometry": Polygon([(-100.93, 46.80), (-100.91, 46.80), (-100.91, 46.82), (-100.93, 46.82)]),
++    "precision_tier": "A",  # this one was built from a NAIP-verified plot boundary
++    "boundary_source": "NAIP plot delineation, 2026-08",
++}
++
++CSB_FIELD = {
++    "field_id": "CSB123456",
++    "geometry": Polygon([(-100.93, 46.80), (-100.91, 46.80), (-100.91, 46.82), (-100.93, 46.82)]),
++}
++
++
++def test_match_station_name_exact():
++    match = match_station_name("Absaraka Farm", [NDSU_FARM, MANDAN_FARM])
++    assert match["key"] == "NDSU Horticulture Research Farm"
++
++
++def test_match_station_name_substring_either_direction():
++    # paper text is a longer, differently-worded description containing the alias
++    match = match_station_name(
++        "near Mandan, ND (West site)", [NDSU_FARM, MANDAN_FARM]
++    )
++    assert match["key"] == "USDA-ARS Northern Great Plains Research Lab"
++
++
++def test_match_station_name_no_hit_returns_none():
++    assert match_station_name("Some Unrelated University Farm", [NDSU_FARM]) is None
++    assert match_station_name(None, [NDSU_FARM]) is None
++    assert match_station_name("Absaraka Farm", []) is None
++
++
++def test_match_csb_polygon_point_inside():
++    hit = match_csb_polygon(46.81, -100.92, [CSB_FIELD])
++    assert hit["field_id"] == "CSB123456"
++
++
++def test_match_csb_polygon_point_outside_returns_none():
++    assert match_csb_polygon(0.0, 0.0, [CSB_FIELD]) is None
++
++
++def test_resolve_site_geometry_station_registry_hit_uses_its_own_tier():
++    # station registry match wins even when a CSB polygon is ALSO available
++    # at that point (station registry is tried first, per the confirmed order)
++    result = resolve_site_geometry(
++        "near Mandan, ND (West site)", 46.81, -100.92,
++        station_registry=[NDSU_FARM, MANDAN_FARM], csb_entries=[CSB_FIELD],
++    )
++    assert result.geom_source == "station"
++    assert result.spatial_tier == "A"  # MANDAN_FARM's own precision_tier, not a hardcoded "S"
++    assert result.matched_key == "USDA-ARS Northern Great Plains Research Lab"
++    assert json.loads(result.geometry_geojson)["type"] == "Polygon"
++
++
++def test_resolve_site_geometry_falls_back_to_csb_when_no_station_match():
++    result = resolve_site_geometry(
++        "An unregistered farm not in the gazetteer", 46.81, -100.92,
++        station_registry=[NDSU_FARM], csb_entries=[CSB_FIELD],
++    )
++    assert result.geom_source == "csb"
++    assert result.spatial_tier == "C"
++    assert result.matched_key == "CSB123456"
++
++
++def test_resolve_site_geometry_falls_back_to_tier_d_when_nothing_matches():
++    result = resolve_site_geometry(
++        "An unregistered farm", 0.0, 0.0,
++        station_registry=[NDSU_FARM], csb_entries=[CSB_FIELD],
++    )
++    assert result.geom_source == "none"
++    assert result.spatial_tier == "D"
++    assert result.geometry_geojson is None
++
++
++def test_resolve_site_geometry_empty_registry_does_not_crash():
++    # expected state until stations.gpkg is built (2026-09-11) -- must
++    # degrade gracefully rather than raising
++    result = resolve_site_geometry("Any Farm", 46.81, -100.92, station_registry=[], csb_entries=[])
++    assert result.spatial_tier == "D"
++
++
++def test_resolve_all_sites_splits_manual_review_queue():
++    sites = [
++        {"site_key": "s1", "station_name": "Absaraka Farm", "lat": 46.99, "lon": -97.35},
++        {"site_key": "s2", "station_name": "unmatched site", "lat": 0.0, "lon": 0.0},
++    ]
++    resolved, manual_review = resolve_all_sites(
++        sites, station_registry_path=Path("/nonexistent.gpkg"), csb_path=Path("/nonexistent")
++    )
++    assert len(resolved) == 2
++    # registry path doesn't exist (empty registry) and CSB path doesn't exist either,
++    # so BOTH sites fall through to tier D here -- this test is about the split
++    # mechanics, not about station matching (see test_resolve_site_geometry_* for that)
++    assert len(manual_review) == 2
++    assert {r["site_key"] for r in manual_review} == {"s1", "s2"}
++    assert all(r["spatial_tier"] == "D" for r in resolved)
+diff --git a/tests/test_pipeline.py b/tests/test_pipeline.py
+new file mode 100644
+index 0000000..5ca0612
+--- /dev/null
++++ b/tests/test_pipeline.py
+@@ -0,0 +1,269 @@
++"""Unit tests for the multi-row pipeline: species candidates, long-format
++GHG, per-row response ratios, assemble_rows, and the LLM stages with the
++model call mocked (no network, no key needed)."""
++
++import math
++import sys
++from pathlib import Path
++
++import pytest
++
++sys.path.insert(0, str(Path(__file__).parent.parent))
++
++from src import llm_client  # noqa: E402
++from src.literature_extractor import (  # noqa: E402
++    ExtractedField,
++    PaperSpec,
++    assemble_rows,
++    classify_response_type,
++    compute_cc_duration,
++    compute_response_ratios,
++    enumerate_experimental_units,
++    extract_deterministic,
++    extract_narrow_llm,
++    find_species_candidates,
++    load_data_catalog,
++    load_schema,
++    sanity_check_row,
++)
++
++
++def test_ghg_schema_is_long_format():
++    schema = load_schema()
++    names = [f["name"] for f in schema["fields"]["ghg_data"]]
++    assert "gas_type" in names
++    assert "ghg_cc_mean" in names
++    assert not any(n.startswith("ghg_co2_") for n in names)
++
++
++def test_multiple_species_are_candidates_not_a_single_pick():
++    catalog = load_data_catalog()
++    text = ("Cover crop treatments were hairy vetch, cereal rye, and a rye + vetch mixture "
++            "following soybean. Barley was grown in the previous rotation.")
++    cands = find_species_candidates(text, catalog)
++    matched = {c["matched_name"].lower() for c in cands}
++    assert "hairy vetch" in matched
++    assert len(cands) >= 2
++    fields = extract_deterministic(text, catalog)
++    assert "cc_species" not in fields  # ambiguous -> left to enumeration
++    assert fields["cc_species_candidates"].value == cands
++
++
++def test_single_species_is_assigned_deterministically():
++    catalog = load_data_catalog()
++    fields = extract_deterministic("The cover crop was hairy vetch, drilled in October.", catalog)
++    assert fields["cc_species"].value.lower() == "hairy vetch"
++    assert fields["cc_category"].value == "Legume"
++
++
++def test_compute_response_ratios_ghg_long_format_with_variance():
++    row = {
++        "gas_type": ExtractedField("n2o", "high", "", "narrow_llm"),
++        "ghg_cc_mean": ExtractedField(1.13, "high", "", "narrow_llm"),
++        "ghg_control_mean": ExtractedField(1.43, "high", "", "narrow_llm"),
++        "ghg_cc_sd": ExtractedField(0.2, "high", "", "narrow_llm"),
++        "ghg_control_sd": ExtractedField(0.3, "high", "", "narrow_llm"),
++        "ghg_n": ExtractedField(4, "high", "", "narrow_llm"),
++    }
++    out = compute_response_ratios(row)
++    assert abs(out["ghg_ln_response_ratio"].value - math.log(1.13 / 1.43)) < 1e-9
++    expected_var = 0.2 ** 2 / (4 * 1.13 ** 2) + 0.3 ** 2 / (4 * 1.43 ** 2)
++    assert abs(out["ghg_var_lnr"].value - expected_var) < 1e-12
++
++
++def test_assemble_rows_one_row_per_unit_sharing_block1():
++    schema = load_schema()
++    paper = PaperSpec(pdf_path=Path("x.pdf"), paper_id=1)
++    shared = {
++        "latitude": ExtractedField(46.81, "high", "regex", "regex"),
++        "longitude": ExtractedField(-100.92, "high", "regex", "regex"),
++        "tillage": ExtractedField("NT", "high", "kw", "gazetteer"),
++        "irrigation_raw": ExtractedField("rainfed", "high", "q", "narrow_llm"),
++    }
++    units = [
++        {"cc_species": ExtractedField("Hairy vetch", "high", "q", "narrow_llm"),
++         "gas_type": ExtractedField("co2", "high", "q", "narrow_llm"),
++         "ghg_cc_mean": ExtractedField(1.56, "high", "q", "narrow_llm"),
++         "ghg_control_mean": ExtractedField(1.85, "high", "q", "narrow_llm")},
++        {"cc_species": ExtractedField("Hairy vetch", "high", "q", "narrow_llm"),
++         "gas_type": ExtractedField("n2o", "high", "q", "narrow_llm"),
++         "ghg_cc_mean": ExtractedField(1.13, "high", "q", "narrow_llm"),
++         "ghg_control_mean": ExtractedField(1.43, "high", "q", "narrow_llm")},
++    ]
++    rows = assemble_rows(paper, shared, units, schema)
++    assert len(rows) == 2
++    assert all(r["latitude"] == 46.81 and r["tillage"] == "NT" for r in rows)
++    assert [r["gas_type"] for r in rows] == ["co2", "n2o"]
++    assert abs(rows[1]["ghg_ln_response_ratio"] - math.log(1.13 / 1.43)) < 1e-9
++    assert rows[0]["irrigation_norm"] == "Rainfed"
++    assert rows[0]["unit_index"] == 1 and rows[1]["n_units_in_paper"] == 2
++    assert "cc_species_candidates" not in rows[0]
++
++
++def test_assemble_rows_site_specific_units_override_paper_wide_shared_fields():
++    """Regression test: a paper with two physically distinct sites under
++    different management (e.g. an unfertilized 'West site' vs. a
++    conventionally-fertilized 'East site' both using glyphosate before
++    planting) must produce one row per site with THAT site's own
++    management values, not one row blending both sites together."""
++    schema = load_schema()
++    paper = PaperSpec(pdf_path=Path("x.pdf"), paper_id=1)
++    # paper-wide fallback values (what a single-site paper would use as-is)
++    shared = {
++        "latitude": ExtractedField(46.99, "high", "regex", "regex"),
++        "longitude": ExtractedField(-97.35, "high", "regex", "regex"),
++        "fertilize_raw": ExtractedField("not fertilized", "medium", "blended guess", "narrow_llm"),
++        "tillage_type_raw": ExtractedField("no-till", "high", "q", "narrow_llm"),
++    }
++    units = [
++        {"location": ExtractedField("East site", "high", "q", "narrow_llm"),
++         "fertilize_raw": ExtractedField("conventional; glyphosate pre-plant", "high", "q", "narrow_llm"),
++         "cc_species": ExtractedField("Hairy vetch", "high", "q", "narrow_llm")},
++        {"location": ExtractedField("West site", "high", "q", "narrow_llm"),
++         "fertilize_raw": ExtractedField("not fertilized either year", "high", "q", "narrow_llm"),
++         "cc_species": ExtractedField("Hairy vetch", "high", "q", "narrow_llm")},
++    ]
++    rows = assemble_rows(paper, shared, units, schema)
++    assert len(rows) == 2
++    assert rows[0]["location"] == "East site" and rows[1]["location"] == "West site"
++    assert rows[0]["fertilize_raw"] == "conventional; glyphosate pre-plant"
++    assert rows[1]["fertilize_raw"] == "not fertilized either year"
++    # tillage wasn't overridden by either unit -> both rows fall back to the shared value
++    assert rows[0]["tillage_type_raw"] == "no-till" and rows[1]["tillage_type_raw"] == "no-till"
++    # both rows still share the same paper (same paper_id/pdf_path, same shared lat/lon) --
++    # they are marked as the same article at two physical sites via paper_id + differing location
++    assert rows[0]["paper_id"] == rows[1]["paper_id"] == 1
++    assert rows[0]["pdf_path"] == rows[1]["pdf_path"] == "x.pdf"
++    assert rows[0]["latitude"] == rows[1]["latitude"] == 46.99
++
++
++def test_assemble_row_does_not_clobber_paper_id_with_none():
++    """Regression test: paper_id is ALSO a schema field (status: active,
++    extraction_method: manual_existing) that is never populated via
++    all_fields (it comes from PaperSpec, e.g. --paper-id on the CLI) --
++    the generic 'else: row[name] = None' schema loop must not stomp on
++    the value already seeded from paper.paper_id."""
++    schema = load_schema()
++    paper = PaperSpec(pdf_path=Path("x.pdf"), paper_id=42)
++    rows = assemble_rows(paper, {}, [], schema)
++    assert rows[0]["paper_id"] == 42
++
++
++def test_compute_cc_duration_counts_distinct_years():
++    row = {"cc_years_practiced": ExtractedField("2016,2017", "high", "q", "narrow_llm")}
++    out = compute_cc_duration(row)
++    assert out["cc_duration_years"].value == 2
++
++
++def test_compute_cc_duration_handles_non_contiguous_years():
++    # duration = count of years actually practiced, not (max - min + 1)
++    row = {"cc_years_practiced": ExtractedField("2016, 2018", "high", "q", "narrow_llm")}
++    out = compute_cc_duration(row)
++    assert out["cc_duration_years"].value == 2
++
++
++def test_compute_cc_duration_absent_when_years_not_extracted():
++    assert compute_cc_duration({}) == {}
++
++
++def test_assemble_rows_computes_cc_duration_per_row():
++    schema = load_schema()
++    paper = PaperSpec(pdf_path=Path("x.pdf"))
++    units = [{"cc_years_practiced": ExtractedField("2016,2017", "high", "q", "narrow_llm")}]
++    rows = assemble_rows(paper, {}, units, schema, include_proposed=True)
++    assert rows[0]["cc_duration_years"] == 2
++
++
++def test_enumerate_units_mocked_carries_site_specific_fields_through(monkeypatch):
++    """The parsing loop in enumerate_experimental_units is field-name-agnostic,
++    so newly added SITE_VARIABLE_FIELDS (location, fertilize_raw, ...) and
++    cc_years_practiced flow through untouched -- this pins that behavior."""
++    schema = load_schema()
++    fake = {"design_summary": "2 sites x 1 species x 1 gas",
++            "units": [
++                {"location": {"value": "West site", "confidence": "high", "evidence": "q"},
++                 "fertilize_raw": {"value": "not fertilized", "confidence": "high", "evidence": "q"},
++                 "cc_years_practiced": {"value": "2016,2017", "confidence": "high", "evidence": "q"},
++                 "gas_type": {"value": "n2o", "confidence": "high", "evidence": "q"}},
++            ]}
++    monkeypatch.setattr(llm_client, "chat_json", lambda *a, **k: fake)
++    units = enumerate_experimental_units("m", "r", [], ["ghg_n2o"], schema)
++    assert len(units) == 1
++    assert units[0]["location"].value == "West site"
++    assert units[0]["fertilize_raw"].value == "not fertilized"
++    assert units[0]["cc_years_practiced"].value == "2016,2017"
++
++
++def test_assemble_rows_with_no_units_keeps_one_row():
++    schema = load_schema()
++    rows = assemble_rows(PaperSpec(Path("x.pdf")), {"latitude": ExtractedField(1.0, "high", "", "regex")}, [], schema)
++    assert len(rows) == 1 and rows[0]["latitude"] == 1.0
++
++
++def test_sanity_check_flags_missing_gas_type():
++    row = {"ghg_cc_mean": ExtractedField(1.0, "high", "", "narrow_llm")}
++    assert any("gas_type" in f for f in sanity_check_row(row))
++
++
++# ── LLM stages with the model mocked ─────────────────────────────────────
++
++def test_classify_response_type_mocked(monkeypatch):
++    monkeypatch.setattr(llm_client, "chat_json",
++                        lambda *a, **k: {"response_types": ["yield", "ghg_n2o", "bogus"], "evidence": "Table 2"})
++    ef = classify_response_type("abstract", "results")
++    assert ef.value == "yield,ghg_n2o"
++    assert ef.method == "narrow_llm"
++
++
++def test_enumerate_units_mocked_drops_null_values(monkeypatch):
++    schema = load_schema()
++    fake = {"design_summary": "2 species x 1 gas",
++            "units": [
++                {"cc_species": {"value": "Cereal rye", "confidence": "high", "evidence": "q"},
++                 "gas_type": {"value": "n2o", "confidence": "high", "evidence": "q"},
++                 "ghg_cc_mean": {"value": 2.1, "confidence": "high", "evidence": "Table 3"},
++                 "ghg_control_mean": {"value": None, "confidence": "low", "evidence": "Fig. 2"}},
++            ]}
++    monkeypatch.setattr(llm_client, "chat_json", lambda *a, **k: fake)
++    units = enumerate_experimental_units("m", "r", [], ["ghg_n2o"], schema)
++    assert len(units) == 1
++    assert units[0]["ghg_cc_mean"].value == 2.1
++    assert "ghg_control_mean" not in units[0]
++    assert units[0]["_design_summary"].value == "2 species x 1 gas"
++
++
++def test_extract_narrow_llm_mocked(monkeypatch):
++    schema = load_schema()
++    monkeypatch.setattr(llm_client, "chat_json",
++                        lambda *a, **k: {"country": {"value": "USA", "confidence": "high", "evidence": "Mandan, ND"},
++                                         "irrigation_raw": {"value": None}})
++    out = extract_narrow_llm("methods", ["country", "irrigation_raw"], schema)
++    assert out["country"].value == "USA" and "irrigation_raw" not in out
++
++
++def test_llm_not_configured_raises(monkeypatch):
++    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
++    with pytest.raises(llm_client.LLMNotConfigured):
++        llm_client.chat("s", "u", purpose="t", cfg=llm_client.LLMConfig(api_key=None))
++
++
++def test_parse_json_response_tolerates_fences_and_prose():
++    assert llm_client.parse_json_response('```json\n{"a": 1}\n```') == {"a": 1}
++    assert llm_client.parse_json_response('Sure, here it is: {"a": [1,2]} thanks') == {"a": [1, 2]}
++
++
++def test_parse_json_response_finds_real_json_after_inline_reasoning():
++    """Regression test: some reasoning-model deployments (observed on
++    nrp/glm-5 with thinking disabled via extra_body) put chain-of-thought
++    directly in the answer content AHEAD OF the real JSON, including a
++    JSON-shaped fragment quoted from the prompt itself — 'first { to
++    last }' spans the prose between them and fails to parse. The real
++    payload (last balanced block) must still be found."""
++    messy = ('The user wants the capital of France. Return {"answer": "..."}\n\n'
++            'I should return valid JSON only, as instructed.{"answer": "Paris"}')
++    assert llm_client.parse_json_response(messy) == {"answer": "Paris"}
++
++
++def test_parse_json_response_ignores_braces_inside_string_values():
++    tricky = 'blah {"note": "curly brace example: {not real}"} trailing text'
++    assert llm_client.parse_json_response(tricky) == {"note": "curly brace example: {not real}"}
+diff --git a/workflows/run_extraction.py b/workflows/run_extraction.py
+new file mode 100644
+index 0000000..cd1715f
+--- /dev/null
++++ b/workflows/run_extraction.py
+@@ -0,0 +1,126 @@
++#!/usr/bin/env python3
++"""
++run_extraction.py — generic command-line runner for the extraction pipeline.
++
++    python workflows/run_extraction.py --project franco2021_test \
++        --pdf workflows/franco2021_test/input/*.pdf
++
++    python workflows/run_extraction.py --project batch1 --pdf-dir test_pdfs/ \
++        --model anthropic/claude-sonnet-4
++
++Options
++  --project NAME        output goes to workflows/NAME/output/NAME.csv (+ _report.json)
++  --pdf PATH [PATH...]  one or more PDFs
++  --pdf-dir DIR         every *.pdf in DIR
++  --paper-id N          paper_id for a single PDF (optional)
++  --no-llm              deterministic stages only (no API key needed)
++  --exclude-proposed    skip schema fields with status proposed_new (soc/nitrogen
++                        blocks, doi, response_types_detected). Default: populate them —
++                        they are flagged proposed_new in the schema for review, but the
++                        pipeline needs them to be useful.
++  --model NAME          override LLM_MODEL for this run
++  --api-base URL        override LLM_API_BASE for this run
++  --prompt TEXT         the user's exact request, copied into PROMPT_ACTION_LOG.md
++
++Environment: OPENAI_API_KEY (required unless --no-llm), LLM_API_BASE, LLM_MODEL.
++"""
++
++import argparse
++import datetime as dt
++import json
++import os
++import sys
++from pathlib import Path
++
++_repo_root = next(p for p in Path(__file__).resolve().parents
++                  if (p / "src" / "literature_extractor.py").exists())
++sys.path.insert(0, str(_repo_root))
++
++from src import llm_client  # noqa: E402
++from src.literature_extractor import (  # noqa: E402
++    ExtractionWorkflow,
++    PaperSpec,
++    run_extraction,
++)
++
++
++def _append_log(project: str, prompt: str, model: str, pdfs: list[Path], out_dir: Path, reports_path: Path) -> None:
++    reports = json.loads(reports_path.read_text(encoding="utf-8")) if reports_path.exists() else []
++    n_rows = sum(r.get("n_rows", 0) for r in reports)
++    calls = [c for r in reports for c in r.get("llm_calls", [])]
++    tok_in = sum(c.get("prompt_tokens") or 0 for c in calls)
++    tok_out = sum(c.get("completion_tokens") or 0 for c in calls)
++    flagged = [f"{Path(r['pdf']).name}: {r['status']} — {'; '.join(r.get('notes', []))}"
++               for r in reports if r.get("status") != "ok" or r.get("notes")]
++    entry = f"""
++## {dt.date.today().isoformat()}
++
++### Prompt
++{prompt or '(run via workflows/run_extraction.py, no prompt text given)'}
++
++### LLM
++{model} via {os.environ.get('LLM_API_BASE', llm_client.DEFAULT_API_BASE)} — {len(calls)} call(s), {tok_in} prompt / {tok_out} completion tokens
++
++### Files and folders inspected
++{chr(10).join(f'- {p}' for p in pdfs)}
++
++### Actions taken
++- `workflows/run_extraction.py --project {project}` → {n_rows} row(s) written to `{out_dir / (project + '.csv')}`
++- per-paper report: `{reports_path}`
++
++### Verification
++- offline sanity_check_row() flags are in the `review_flags` column; response ratios recomputed in code
++- external API validation (GBIF/WFO/GeoNames): not run (validate_with_apis not yet wired)
++
++### Flagged for human review
++{chr(10).join(f'- {f}' for f in flagged) or '- none'}
++
++### Open questions and follow-up
++- review every `low` / `medium` confidence cell against the PDF before merging into the master table
++"""
++    with open(_repo_root / "PROMPT_ACTION_LOG.md", "a", encoding="utf-8") as f:
++        f.write(entry)
++
++
++def main() -> int:
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("--project", required=True)
++    ap.add_argument("--pdf", nargs="*", default=[])
++    ap.add_argument("--pdf-dir")
++    ap.add_argument("--paper-id", type=int)
++    ap.add_argument("--no-llm", action="store_true")
++    ap.add_argument("--exclude-proposed", action="store_true")
++    ap.add_argument("--model")
++    ap.add_argument("--api-base")
++    ap.add_argument("--prompt", default="")
++    args = ap.parse_args()
++
++    if args.model:
++        os.environ["LLM_MODEL"] = args.model
++    if args.api_base:
++        os.environ["LLM_API_BASE"] = args.api_base
++
++    pdfs = [Path(p) for p in args.pdf]
++    if args.pdf_dir:
++        pdfs += sorted(Path(args.pdf_dir).glob("*.pdf"))
++    if not pdfs:
++        ap.error("no PDFs given (--pdf or --pdf-dir)")
++
++    if not args.no_llm and not os.environ.get("OPENAI_API_KEY"):
++        print("OPENAI_API_KEY not set — export your AI Verde key, or pass --no-llm.", file=sys.stderr)
++        return 2
++
++    cfg = llm_client.LLMConfig.from_env()
++    out_dir = _repo_root / "workflows" / args.project / "output"
++    papers = [PaperSpec(pdf_path=p, paper_id=args.paper_id if len(pdfs) == 1 else None) for p in pdfs]
++    wf = ExtractionWorkflow(name=args.project, papers=papers, output_dir=out_dir)
++
++    rows = run_extraction(wf, use_llm=not args.no_llm, include_proposed=not args.exclude_proposed, cfg=cfg)
++    _append_log(args.project, args.prompt, "none (--no-llm)" if args.no_llm else cfg.model,
++                pdfs, out_dir, out_dir / f"{args.project}_report.json")
++    print(f"done: {len(rows)} row(s) from {len(pdfs)} PDF(s)")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+-- 
+2.43.0
+

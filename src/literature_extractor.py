@@ -530,33 +530,51 @@ def enumerate_experimental_units(
 
 # ═══════════════════════════ Step 6b: Narrow LLM extraction ══════════════
 
-def extract_narrow_llm(section_text: str, field_names: list[str], schema: dict, cfg=None) -> dict[str, ExtractedField]:
+def extract_narrow_llm(section_text: str, field_names: list[str], schema: dict, cfg=None,
+                       batch_size: int = 4) -> dict[str, ExtractedField]:
     """
-    AGENTS.md step 6b. ONE consolidated LLM call scoped to section_text
-    only — never the full paper. Used for the paper-level (shared) Block
-    1 narrow_llm fields not filled by extract_deterministic — country,
+    AGENTS.md step 6b. Extracts the paper-level (shared) Block 1
+    narrow_llm fields not filled by extract_deterministic — country,
     location, tillage_type_raw, fertilize_raw, irrigation_raw, soil
     texture, rotation, ccs_year_duration, etc.
+
+    Split into batches of `batch_size` fields per call rather than one
+    call asking for everything at once: a reasoning model spends
+    completion-token budget on reasoning proportional to how many
+    things it's asked to juggle at once, and a 12-15-field single call
+    was observed (2026-09, nrp/glm-5 on AI Verde) to burn its entire
+    token budget on reasoning and time out before writing any answer.
+    Smaller batches finish reliably even on a slow/overloaded model
+    pool, at the cost of more (cheaper, faster) calls instead of one
+    slow one. One failed batch is logged and skipped — it never blocks
+    the other batches' fields.
     """
     from src import llm_client
 
     if not field_names:
         return {}
-    user = (
-        "Extract the following fields from the METHODS text of a cover crop field study. "
-        "Report each value verbatim as the paper states it (these are *_raw fields; do not "
-        "normalize). Use null when the text does not state it.\n\n"
-        f"Fields:\n{_field_descriptions(schema, field_names)}\n\n"
-        f"METHODS:\n{_truncate(section_text, 30000)}\n\n"
-        "Answer as JSON: {\"<field>\": {\"value\": ..., \"confidence\": \"high|medium|low\", "
-        "\"evidence\": \"<verbatim quote>\"}, ...}"
-    )
-    data = llm_client.chat_json(_SYSTEM_BASE, user, purpose="extract_narrow_llm", cfg=cfg)
     out: dict[str, ExtractedField] = {}
-    for name in field_names:
-        ef = _to_extracted(data.get(name), "narrow_llm")
-        if ef is not None:
-            out[name] = ef
+    methods_text = _truncate(section_text, 30000)
+    batches = [field_names[i:i + batch_size] for i in range(0, len(field_names), batch_size)]
+    for batch in batches:
+        user = (
+            "Extract the following fields from the METHODS text of a cover crop field study. "
+            "Report each value verbatim as the paper states it (these are *_raw fields; do not "
+            "normalize). Use null when the text does not state it.\n\n"
+            f"Fields:\n{_field_descriptions(schema, batch)}\n\n"
+            f"METHODS:\n{methods_text}\n\n"
+            "Answer as JSON: {\"<field>\": {\"value\": ..., \"confidence\": \"high|medium|low\", "
+            "\"evidence\": \"<verbatim quote>\"}, ...}"
+        )
+        try:
+            data = llm_client.chat_json(_SYSTEM_BASE, user, purpose=f"extract_narrow_llm[{','.join(batch)}]", cfg=cfg)
+        except Exception as e:  # noqa: BLE001 — one bad batch must not lose the others
+            print(f"  [extract_narrow_llm] batch {batch} failed, skipping: {e!r}")
+            continue
+        for name in batch:
+            ef = _to_extracted(data.get(name), "narrow_llm")
+            if ef is not None:
+                out[name] = ef
     return out
 
 
@@ -833,11 +851,17 @@ def extract_paper(paper: PaperSpec, schema: dict, data_catalog: dict, *, use_llm
         report.update(status="skipped", notes=[msg])
         return [], report
 
+    if verbose:
+        print(f"[{Path(paper.pdf_path).name}] converting PDF to markdown...", flush=True)
     markdown_text, ident = pdf_to_markdown(paper.pdf_path)
     sections = locate_sections(markdown_text)
     report["fallback_used"] = sections["fallback_used"]
     report["methods_chars"] = len(sections["methods"] or "")
     report["results_chars"] = len(sections["results"] or "")
+    if verbose:
+        print(f"[{Path(paper.pdf_path).name}] sections located: "
+             f"methods={report['methods_chars']} chars, results={report['results_chars']} chars, "
+             f"fallback={sections['fallback_used']}", flush=True)
 
     shared: dict[str, ExtractedField] = {}
     if ident.get("doi"):
@@ -861,15 +885,24 @@ def extract_paper(paper: PaperSpec, schema: dict, data_catalog: dict, *, use_llm
         abstract_match = ABSTRACT_HEADING_PATTERN.search(markdown_text)
         abstract_text = _span_from_heading(markdown_text, abstract_match) if abstract_match else markdown_text[:4000]
 
+        if verbose:
+            print(f"[{Path(paper.pdf_path).name}] stage 1/3: classify_response_type...", flush=True)
         rt = classify_response_type(abstract_text, sections["results"], cfg=cfg)
         shared["response_types_detected"] = rt
         response_types = [t for t in rt.value.split(",") if t]
         report["response_types"] = response_types
+        if verbose:
+            print(f"[{Path(paper.pdf_path).name}] response_types_detected={response_types}", flush=True)
 
         missing = [f for f in SHARED_NARROW_FIELDS if f not in shared]
+        if verbose:
+            print(f"[{Path(paper.pdf_path).name}] stage 2/3: extract_narrow_llm "
+                 f"({len(missing)} shared Block 1 fields)...", flush=True)
         shared.update(extract_narrow_llm(methods_text, missing, schema, cfg=cfg))
 
         if response_types:
+            if verbose:
+                print(f"[{Path(paper.pdf_path).name}] stage 3/3: enumerate_experimental_units...", flush=True)
             units = enumerate_experimental_units(methods_text, sections["results"], candidates,
                                                  response_types, schema, cfg=cfg)
             if units:
@@ -917,7 +950,11 @@ def run_extraction(workflow: ExtractionWorkflow, *, use_llm: bool = True,
         reports.append(report)
 
     if workflow.output_dir:
-        out_path = _write_output(rows, workflow.output_dir, workflow.name)
+        out_path = Path(workflow.output_dir) / f"{workflow.name}.csv"
+        if rows:
+            out_path = _write_output(rows, workflow.output_dir, workflow.name)
+        elif workflow.verbose:
+            print(f"NOTE: no rows extracted — leaving {out_path} untouched")
         with open(Path(workflow.output_dir) / f"{workflow.name}_report.json", "w", encoding="utf-8") as f:
             json.dump(reports, f, indent=2, default=str)
         if workflow.verbose:
@@ -927,7 +964,14 @@ def run_extraction(workflow: ExtractionWorkflow, *, use_llm: bool = True,
 
 
 def _write_output(rows: list[dict], output_dir: Path, name: str) -> Path:
-    """Append rows to workflows/<project>/output/<name>.csv."""
+    """
+    Append rows to workflows/<project>/output/<name>.csv. Never called
+    with an empty rows list (see run_extraction) — an empty DataFrame has
+    no columns and would silently produce a 0-byte-effective CSV that
+    breaks the NEXT run's read below. A pre-existing file that fails to
+    parse (empty, truncated by a prior crash) is treated as absent rather
+    than raised, so one bad file never blocks a fresh run.
+    """
     import pandas as pd
 
     output_dir = Path(output_dir)
@@ -936,7 +980,10 @@ def _write_output(rows: list[dict], output_dir: Path, name: str) -> Path:
 
     df = pd.DataFrame(rows)
     if out_path.exists():
-        existing = pd.read_csv(out_path)
-        df = pd.concat([existing, df], ignore_index=True)
+        try:
+            existing = pd.read_csv(out_path)
+            df = pd.concat([existing, df], ignore_index=True)
+        except pd.errors.EmptyDataError:
+            pass  # prior run left an empty/corrupt file — start fresh
     df.to_csv(out_path, index=False)
     return out_path

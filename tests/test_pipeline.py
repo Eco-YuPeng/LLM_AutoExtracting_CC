@@ -155,3 +155,20 @@ def test_llm_not_configured_raises(monkeypatch):
 def test_parse_json_response_tolerates_fences_and_prose():
     assert llm_client.parse_json_response('```json\n{"a": 1}\n```') == {"a": 1}
     assert llm_client.parse_json_response('Sure, here it is: {"a": [1,2]} thanks') == {"a": [1, 2]}
+
+
+def test_parse_json_response_finds_real_json_after_inline_reasoning():
+    """Regression test: some reasoning-model deployments (observed on
+    nrp/glm-5 with thinking disabled via extra_body) put chain-of-thought
+    directly in the answer content AHEAD OF the real JSON, including a
+    JSON-shaped fragment quoted from the prompt itself — 'first { to
+    last }' spans the prose between them and fails to parse. The real
+    payload (last balanced block) must still be found."""
+    messy = ('The user wants the capital of France. Return {"answer": "..."}\n\n'
+            'I should return valid JSON only, as instructed.{"answer": "Paris"}')
+    assert llm_client.parse_json_response(messy) == {"answer": "Paris"}
+
+
+def test_parse_json_response_ignores_braces_inside_string_values():
+    tricky = 'blah {"note": "curly brace example: {not real}"} trailing text'
+    assert llm_client.parse_json_response(tricky) == {"note": "curly brace example: {not real}"}

@@ -1,0 +1,134 @@
+[
+  {
+    "pdf": "test_pdfs/franco2021.pdf",
+    "status": "ok",
+    "notes": [
+      "no supported response type detected \u2014 Block 2 left blank"
+    ],
+    "fallback_used": null,
+    "methods_chars": 14357,
+    "results_chars": 22467,
+    "species_candidates": [
+      {
+        "matched_name": "Millet",
+        "scientific_name": "Panicum miliaceum",
+        "cc_category": "Non-legume",
+        "family": "Poaceae",
+        "mentions": 5
+      },
+      {
+        "matched_name": "Millet",
+        "scientific_name": "Setaria italica",
+        "cc_category": "Non-legume",
+        "family": "Poaceae",
+        "mentions": 5
+      },
+      {
+        "matched_name": "Sunflower",
+        "scientific_name": "Helianthus annuus",
+        "cc_category": "Non-legume",
+        "family": "Asteraceae",
+        "mentions": 4
+      },
+      {
+        "matched_name": "Cowpea",
+        "scientific_name": "Vigna unguiculata",
+        "cc_category": "Legume",
+        "family": "Fabaceae",
+        "mentions": 4
+      },
+      {
+        "matched_name": "Oat",
+        "scientific_name": "Avena sativa",
+        "cc_category": "Non-legume",
+        "family": "Poaceae",
+        "mentions": 2
+      },
+      {
+        "matched_name": "Hairy vetch",
+        "scientific_name": "Vicia villosa",
+        "cc_category": "Legume",
+        "family": "Fabaceae",
+        "mentions": 2
+      },
+      {
+        "matched_name": "Soybean",
+        "scientific_name": "Glycine max",
+        "cc_category": "Legume",
+        "family": "Fabaceae",
+        "mentions": 1
+      },
+      {
+        "matched_name": "Barley",
+        "scientific_name": "Hordeum vulgare",
+        "cc_category": "Non-legume",
+        "family": "Poaceae",
+        "mentions": 1
+      }
+    ],
+    "response_types": [],
+    "llm_calls": [
+      {
+        "purpose": "classify_response_type",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 3.43,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 2679,
+        "completion_tokens": 414,
+        "reasoning_chars": 1464,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[country,location,ccs_year_duration,cc_rotation_raw]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 2.96,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 3886,
+        "completion_tokens": 442,
+        "reasoning_chars": 1137,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[grain_crop_rotation_raw,tillage_type_raw,fertilize_raw,grain_crop_n_rate_raw]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 4.25,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 3869,
+        "completion_tokens": 680,
+        "reasoning_chars": 1994,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[herbicide_raw,irrigation_raw,soil_texture_raw,annual_precipitation_mm]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 10.08,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 3880,
+        "completion_tokens": 1611,
+        "reasoning_chars": 4623,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[annual_temperature_c,notes]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 5.41,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 3803,
+        "completion_tokens": 606,
+        "reasoning_chars": 1667,
+        "image": null
+      }
+    ],
+    "n_rows": 1
+  }
+]
