@@ -20,3 +20,12 @@ pytest>=7.0
 # LLM calls (src/llm_client.py) — any OpenAI-compatible endpoint; on
 # CyVerse this is the AI Verde gateway (Claude-series models).
 openai>=1.40
+
+# Geolocation stage (src/geolocation.py) — point -> polygon via the
+# station registry + USDA Crop Sequence Boundaries. shapely is a hard
+# dependency of the matching logic itself; geopandas/fiona are only
+# needed to actually LOAD stations.gpkg / the CSB .gdb (real files live
+# on CyVerse), so install those there when running this stage for real.
+shapely>=2.0
+geopandas>=0.14  # only needed on CyVerse, to read stations.gpkg / CSB .gdb
+fiona>=1.9        # only needed on CyVerse, to list/read CSB .gdb layers

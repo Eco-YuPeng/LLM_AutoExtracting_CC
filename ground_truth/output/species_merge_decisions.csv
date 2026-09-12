@@ -1,0 +1,25 @@
+entry_a,entry_b,decision,reasoning
+Ceral Rye + Hariy Vetch,Ceral Rye + Hairy Vetch,MERGED,"double typo (Ceral->Cereal implied, Hariy->Hairy) of the same combo"
+Sunnhemp,Sunn Hemp,MERGED,spacing variant of the same species (Crotalaria juncea)
+Rye+Hairy Vetch,Rye + Hairy Vetch,MERGED,spacing around separator only
+cereal rye & hairy vetch,Ceral Rye + Hairy Vetch,MERGED,"case + separator + typo, same combo"
+50%Crimson clover + 50%Ryegrass,25%Crimson clover + 75%Ryegrass,KEPT_SEPARATE,different mixture proportions = different treatment
+75%Crimson clover + 25%Ryegrass,50%Crimson clover + 50%Ryegrass,KEPT_SEPARATE,different mixture proportions = different treatment
+75%Crimson clover + 25%Ryegrass,25%Crimson clover + 75%Ryegrass,KEPT_SEPARATE,inverse proportions = different treatment
+6 species mixture,12 species mixture,KEPT_SEPARATE,different species counts = different treatment
+Cereal Rye/Hairy Vetch,cereal rye & hairy vetch,MERGED,"separator + case only, same combo"
+Cereal Rye/Crimon Clover,cereal rye & crimson clover,MERGED,"typo (Crimon->Crimson) + separator + case, same combo"
+Oilseed radish & Rye,Oilseed radish+Rye,MERGED,"separator/spacing only, same combo"
+cereal rye & hairy vetch,Ceral Rye + Hariy Vetch,MERGED,same combo as above chain
+Cereal Rye/Hairy Vetch,Ceral Rye + Hairy Vetch,MERGED,"same combo, separator + typo"
+Oilseed Radish,Oilseed radish+Rye,KEPT_SEPARATE,single species vs. a 2-species mixture -- genuinely different treatments
+white clover + ryegrass,red clover + ryegrass,KEPT_SEPARATE,white clover and red clover are different species
+Winter Rye,Winter Rape,KEPT_SEPARATE,different species entirely (rye vs. rapeseed); only shares the 'Winter ' prefix and word length
+Ceral Rye + Hairy Vetch,Rye + Hairy Vetch,KEPT_SEPARATE,"is 'Rye' here shorthand for cereal rye, or a genuinely distinct label? Table already tracks 'Rye' (143 rows) and 'Cereal Rye' (28 rows) as separate entries elsewhere -- not merged without your call -- CONFIRMED by Yu Peng 2026-09-11: kept separate."
+Pea & Canola,pea and canola,MERGED,"case + connector word only, same combo"
+Hairy Vetch,Rye+Hairy Vetch,KEPT_SEPARATE,single species vs. a 2-species mixture
+Cereal Rye/Hairy Vetch,Ceral Rye + Hariy Vetch,MERGED,"same combo, separator + typos"
+Mustard & Vetch,Mustard & Vetch & Rye,KEPT_SEPARATE,2-species vs. 3-species mixture
+winter rye & hairy vetch,cereal rye & hairy vetch,KEPT_SEPARATE,same 'Rye' vs. 'Cereal Rye' vs. 'Winter Rye' question as above -- not merged without your call -- CONFIRMED by Yu Peng 2026-09-11: kept separate.
+pea and canola,"pea, oat, and canola",KEPT_SEPARATE,2-species vs. 3-species mixture (missing oat)
+Oilseed Radish,Oilseed radish & Rye,KEPT_SEPARATE,single species vs. a 2-species mixture

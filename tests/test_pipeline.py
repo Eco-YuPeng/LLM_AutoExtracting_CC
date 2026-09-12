@@ -16,6 +16,7 @@ from src.literature_extractor import (  # noqa: E402
     PaperSpec,
     assemble_rows,
     classify_response_type,
+    compute_cc_duration,
     compute_response_ratios,
     enumerate_experimental_units,
     extract_deterministic,
@@ -97,6 +98,100 @@ def test_assemble_rows_one_row_per_unit_sharing_block1():
     assert rows[0]["irrigation_norm"] == "Rainfed"
     assert rows[0]["unit_index"] == 1 and rows[1]["n_units_in_paper"] == 2
     assert "cc_species_candidates" not in rows[0]
+
+
+def test_assemble_rows_site_specific_units_override_paper_wide_shared_fields():
+    """Regression test: a paper with two physically distinct sites under
+    different management (e.g. an unfertilized 'West site' vs. a
+    conventionally-fertilized 'East site' both using glyphosate before
+    planting) must produce one row per site with THAT site's own
+    management values, not one row blending both sites together."""
+    schema = load_schema()
+    paper = PaperSpec(pdf_path=Path("x.pdf"), paper_id=1)
+    # paper-wide fallback values (what a single-site paper would use as-is)
+    shared = {
+        "latitude": ExtractedField(46.99, "high", "regex", "regex"),
+        "longitude": ExtractedField(-97.35, "high", "regex", "regex"),
+        "fertilize_raw": ExtractedField("not fertilized", "medium", "blended guess", "narrow_llm"),
+        "tillage_type_raw": ExtractedField("no-till", "high", "q", "narrow_llm"),
+    }
+    units = [
+        {"location": ExtractedField("East site", "high", "q", "narrow_llm"),
+         "fertilize_raw": ExtractedField("conventional; glyphosate pre-plant", "high", "q", "narrow_llm"),
+         "cc_species": ExtractedField("Hairy vetch", "high", "q", "narrow_llm")},
+        {"location": ExtractedField("West site", "high", "q", "narrow_llm"),
+         "fertilize_raw": ExtractedField("not fertilized either year", "high", "q", "narrow_llm"),
+         "cc_species": ExtractedField("Hairy vetch", "high", "q", "narrow_llm")},
+    ]
+    rows = assemble_rows(paper, shared, units, schema)
+    assert len(rows) == 2
+    assert rows[0]["location"] == "East site" and rows[1]["location"] == "West site"
+    assert rows[0]["fertilize_raw"] == "conventional; glyphosate pre-plant"
+    assert rows[1]["fertilize_raw"] == "not fertilized either year"
+    # tillage wasn't overridden by either unit -> both rows fall back to the shared value
+    assert rows[0]["tillage_type_raw"] == "no-till" and rows[1]["tillage_type_raw"] == "no-till"
+    # both rows still share the same paper (same paper_id/pdf_path, same shared lat/lon) --
+    # they are marked as the same article at two physical sites via paper_id + differing location
+    assert rows[0]["paper_id"] == rows[1]["paper_id"] == 1
+    assert rows[0]["pdf_path"] == rows[1]["pdf_path"] == "x.pdf"
+    assert rows[0]["latitude"] == rows[1]["latitude"] == 46.99
+
+
+def test_assemble_row_does_not_clobber_paper_id_with_none():
+    """Regression test: paper_id is ALSO a schema field (status: active,
+    extraction_method: manual_existing) that is never populated via
+    all_fields (it comes from PaperSpec, e.g. --paper-id on the CLI) --
+    the generic 'else: row[name] = None' schema loop must not stomp on
+    the value already seeded from paper.paper_id."""
+    schema = load_schema()
+    paper = PaperSpec(pdf_path=Path("x.pdf"), paper_id=42)
+    rows = assemble_rows(paper, {}, [], schema)
+    assert rows[0]["paper_id"] == 42
+
+
+def test_compute_cc_duration_counts_distinct_years():
+    row = {"cc_years_practiced": ExtractedField("2016,2017", "high", "q", "narrow_llm")}
+    out = compute_cc_duration(row)
+    assert out["cc_duration_years"].value == 2
+
+
+def test_compute_cc_duration_handles_non_contiguous_years():
+    # duration = count of years actually practiced, not (max - min + 1)
+    row = {"cc_years_practiced": ExtractedField("2016, 2018", "high", "q", "narrow_llm")}
+    out = compute_cc_duration(row)
+    assert out["cc_duration_years"].value == 2
+
+
+def test_compute_cc_duration_absent_when_years_not_extracted():
+    assert compute_cc_duration({}) == {}
+
+
+def test_assemble_rows_computes_cc_duration_per_row():
+    schema = load_schema()
+    paper = PaperSpec(pdf_path=Path("x.pdf"))
+    units = [{"cc_years_practiced": ExtractedField("2016,2017", "high", "q", "narrow_llm")}]
+    rows = assemble_rows(paper, {}, units, schema, include_proposed=True)
+    assert rows[0]["cc_duration_years"] == 2
+
+
+def test_enumerate_units_mocked_carries_site_specific_fields_through(monkeypatch):
+    """The parsing loop in enumerate_experimental_units is field-name-agnostic,
+    so newly added SITE_VARIABLE_FIELDS (location, fertilize_raw, ...) and
+    cc_years_practiced flow through untouched -- this pins that behavior."""
+    schema = load_schema()
+    fake = {"design_summary": "2 sites x 1 species x 1 gas",
+            "units": [
+                {"location": {"value": "West site", "confidence": "high", "evidence": "q"},
+                 "fertilize_raw": {"value": "not fertilized", "confidence": "high", "evidence": "q"},
+                 "cc_years_practiced": {"value": "2016,2017", "confidence": "high", "evidence": "q"},
+                 "gas_type": {"value": "n2o", "confidence": "high", "evidence": "q"}},
+            ]}
+    monkeypatch.setattr(llm_client, "chat_json", lambda *a, **k: fake)
+    units = enumerate_experimental_units("m", "r", [], ["ghg_n2o"], schema)
+    assert len(units) == 1
+    assert units[0]["location"].value == "West site"
+    assert units[0]["fertilize_raw"].value == "not fertilized"
+    assert units[0]["cc_years_practiced"].value == "2016,2017"
 
 
 def test_assemble_rows_with_no_units_keeps_one_row():

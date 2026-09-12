@@ -1,0 +1,147 @@
+tier2_common_name,tier3_family,tier4_functional_group,functional_group_raw_needs_review,cc_type_values_seen,yield_table_count,ghg_table_count,raw_variants_seen,tier3_family_method
+Rye,NEEDS_CONFIRMATION,Non-legume,,Single Species,118,25,Rye,not_attempted
+Oat,NEEDS_CONFIRMATION,Non-legume,,Single Species,82,3,Oat; oat,not_attempted
+Hairy Vetch,NEEDS_CONFIRMATION,Legume,,Single Species,47,11,Hairy Vetch,not_attempted
+Vetch,NEEDS_CONFIRMATION,Legume,,Single Species,42,13,Vetch; vetch,not_attempted
+Oilseed Radish,NEEDS_CONFIRMATION,Non-legume,,Single Species,37,2,Oilseed Radish,not_attempted
+Rapeseed,NEEDS_CONFIRMATION,Non-legume,,Single Species,26,2,Rapeseed,not_attempted
+Ryegrass,NEEDS_CONFIRMATION,Non-legume,,Single Species,25,6,Ryegrass; ryegrass,not_attempted
+Cereal Rye,NEEDS_CONFIRMATION,Non-legume,,Single Species,25,3,Cereal Rye,not_attempted
+Triticale,NEEDS_CONFIRMATION,Non-legume,,Single Species,25,0,Triticale,not_attempted
+Mixture,NEEDS_CONFIRMATION,Mixture,,Mixture,24,1,Mixture,not_attempted
+Pea,NEEDS_CONFIRMATION,Legume,,Single Species,24,0,Pea,not_attempted
+Wheat,NEEDS_CONFIRMATION,Non-legume,,Single Species,21,4,Wheat,not_attempted
+Sunn Hemp,NEEDS_CONFIRMATION,Mixture,,Single Species,21,4,Sunn Hemp; Sunn hemp; Sunnhemp,not_attempted
+Winter Rye,NEEDS_CONFIRMATION,Non-legume,,Single Species,19,20,Winter Rye,not_attempted
+Subterranean Clover,NEEDS_CONFIRMATION,Legume,,Single Species,19,0,Subterranean Clover,not_attempted
+Winter Wheat,NEEDS_CONFIRMATION,Non-legume,,Single Species,18,0,Winter Wheat,not_attempted
+Mung Bean,NEEDS_CONFIRMATION,Legume,,Single Species,17,0,Mung Bean,not_attempted
+Annual Ryegrass,NEEDS_CONFIRMATION,Non-legume,,Single Species,16,0,Annual Ryegrass,not_attempted
+Pea + Canola,NEEDS_CONFIRMATION,Mixture,,Double Species,15,0,Pea & Canola; pea and canola,not_attempted
+Crimson Clover,NEEDS_CONFIRMATION,Legume,,Single Species,13,0,Crimson Clover,not_attempted
+cereal rye & forage radish & hairy vetch & Austrian winter pea,NEEDS_CONFIRMATION,Mixture,,Mixture,12,0,cereal rye & forage radish & hairy vetch & Austrian winter pea,not_attempted
+Camelina,NEEDS_CONFIRMATION,Non-legume,,Single Species,12,0,Camelina,not_attempted
+Soybean,NEEDS_CONFIRMATION,Legume,,Single Species,12,0,Soybean,not_attempted
+Italian ryegrass,NEEDS_CONFIRMATION,Non-legume,,Single Species,11,0,Italian ryegrass,not_attempted
+Barley,NEEDS_CONFIRMATION,Non-legume,,Single Species,10,12,Barley,not_attempted
+oat and pea,NEEDS_CONFIRMATION,Mixture,,Double Species,10,0,oat and pea,not_attempted
+"pea, oat, and canola",NEEDS_CONFIRMATION,Mixture,,Mixture,10,0,"pea, oat, and canola",not_attempted
+"pea, oat, canola, hairy vetch, barley, and forage radish",NEEDS_CONFIRMATION,Mixture,,Mixture,10,0,"pea, oat, canola, hairy vetch, barley, and forage radish",not_attempted
+Millet,NEEDS_CONFIRMATION,Non-legume,,Single Species,9,0,Millet,not_attempted
+Cereal rye & Spring triticale & Grass,NEEDS_CONFIRMATION,Mixture,,Mixture,9,0,Cereal rye & Spring triticale & Grass,not_attempted
+Red Clover,NEEDS_CONFIRMATION,Legume,,Single Species,8,2,Red Clover,not_attempted
+Sudan grass,NEEDS_CONFIRMATION,Non-legume,,Single Species,8,0,Sudan grass,not_attempted
+Winter Triticale,NEEDS_CONFIRMATION,Non-legume,,Single Species,8,0,Winter Triticale,not_attempted
+Spring Barley,NEEDS_CONFIRMATION,Non-legume,,Single Species,8,0,Spring Barley,not_attempted
+Black Oat,NEEDS_CONFIRMATION,Non-legume,,Single Species,7,0,Black Oat,not_attempted
+Spring Wheat,NEEDS_CONFIRMATION,Non-legume,,Single Species,7,0,Spring Wheat,not_attempted
+Mustard,NEEDS_CONFIRMATION,Non-legume,,Single Species,6,0,Mustard,not_attempted
+Winter Rape,NEEDS_CONFIRMATION,Non-legume,,Single Species,6,0,Winter Rape,not_attempted
+Rye + Vetch,NEEDS_CONFIRMATION,Mixture,,Double Species,6,0,Rye + Vetch,not_attempted
+soybean and sudangrass,NEEDS_CONFIRMATION,Mixture,,Double Species,6,0,soybean and sudangrass,not_attempted
+Pennycress,NEEDS_CONFIRMATION,Non-legume,,Single Species,6,0,Pennycress,not_attempted
+Winter Camelina,NEEDS_CONFIRMATION,Non-legume,,Single Species,6,0,Winter Camelina,not_attempted
+Pea & Oat,NEEDS_CONFIRMATION,Mixture,,Double Species,5,0,Pea & Oat,not_attempted
+Pea & Oat & Canola,NEEDS_CONFIRMATION,Mixture,,Mixture,5,0,Pea & Oat & Canola,not_attempted
+Huai Bean,NEEDS_CONFIRMATION,Legume,,Single Species,5,0,Huai Bean; Huai bean,not_attempted
+Congo grass,NEEDS_CONFIRMATION,Non-legume,,Single Species,4,0,Congo grass,not_attempted
+white clover,NEEDS_CONFIRMATION,Legume,,Single Species,4,0,white clover,not_attempted
+white clover + ryegrass,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,white clover + ryegrass,not_attempted
+red clover + ryegrass,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,red clover + ryegrass,not_attempted
+"flax, oat, pea, rapeseed, and 10-species mixture",NEEDS_CONFIRMATION,Mixture,,Mixture,4,0,"flax, oat, pea, rapeseed, and 10-species mixture",not_attempted
+Austrian  pea,NEEDS_CONFIRMATION,Legume,,Single Species,4,0,Austrian  pea,not_attempted
+Rye + Clover,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,Rye + Clover,not_attempted
+Oat + Trit,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,Oat + Trit,not_attempted
+Oat + Trit + Pea,NEEDS_CONFIRMATION,Mixture,,Mixture,4,0,Oat + Trit + Pea,not_attempted
+forage radish & buckwheat,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,forage radish & buckwheat,not_attempted
+forage radish & hairy vetch & cereal rye,NEEDS_CONFIRMATION,Mixture,,Mixture,4,0,forage radish & hairy vetch & cereal rye,not_attempted
+Mustard & Rye,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,Mustard & Rye,not_attempted
+Mustard & Vetch,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,Mustard & Vetch,not_attempted
+Mustard & Vetch & Rye,NEEDS_CONFIRMATION,Mixture,,Mixture,4,0,Mustard & Vetch & Rye,not_attempted
+Winter Barley,NEEDS_CONFIRMATION,Non-legume,,Single Species,4,0,Winter Barley,not_attempted
+Oilseed Radish + Rye,NEEDS_CONFIRMATION,Mixture,,Double Species,4,0,Oilseed radish & Rye; Oilseed radish+Rye,not_attempted
+Alfalfa,NEEDS_CONFIRMATION,Legume,,Single Species,3,2,Alfalfa,not_attempted
+Clover,NEEDS_CONFIRMATION,Legume,,Single Species,3,0,Clover,not_attempted
+Common vetch,NEEDS_CONFIRMATION,Legume,,Single Species,3,0,Common vetch,not_attempted
+phacelia +white mustard,NEEDS_CONFIRMATION,Mixture,,Double Species,3,0,phacelia +white mustard,not_attempted
+Italian ryegrass +crimson clover +Persian clover,NEEDS_CONFIRMATION,Mixture,,Mixture,3,0,Italian ryegrass +crimson clover +Persian clover,not_attempted
+hairy vetch +crimson clover,NEEDS_CONFIRMATION,Mixture,,Double Species,3,0,hairy vetch +crimson clover,not_attempted
+Grass+legume,NEEDS_CONFIRMATION,Mixture,,Double Species,3,0,Grass+legume,not_attempted
+Grass+Grass,NEEDS_CONFIRMATION,Mixture,,Double Species,3,0,Grass+Grass,not_attempted
+Brachiaria,NEEDS_CONFIRMATION,Non-legume,,Single Species,3,0,Brachiaria,not_attempted
+Brassica rapa,NEEDS_CONFIRMATION,Non-legume,,Single Species,3,0,Brassica rapa,not_attempted
+"Black oats, spring barley, spring lentil, and daikon radish",NEEDS_CONFIRMATION,Mixture,,Mixture,3,0,"Black oats, spring barley, spring lentil, and daikon radish",not_attempted
+Vetch–canola–pulse–wheat–barley_RT,NEEDS_CONFIRMATION,Rotation,,Rotation,3,0,Vetch–canola–pulse–wheat–barley_RT,not_attempted
+Pulse–wheat–barley_RT,NEEDS_CONFIRMATION,Rotation,,Rotation,3,0,Pulse–wheat–barley_RT,not_attempted
+Canola–wheat–pulse_RT,NEEDS_CONFIRMATION,Rotation,,Rotation,3,0,Canola–wheat–pulse_RT,not_attempted
+Wheat–wheat–wheat_RT,NEEDS_CONFIRMATION,Rotation,,Rotation,3,0,Wheat–wheat–wheat_RT,not_attempted
+75%Crimson clover + 25%Ryegrass,NEEDS_CONFIRMATION,Mixture,,Double Species,3,0,75%Crimson clover + 25%Ryegrass,not_attempted
+50%Crimson clover + 50%Ryegrass,NEEDS_CONFIRMATION,Mixture,,Double Species,3,0,50%Crimson clover + 50%Ryegrass,not_attempted
+25%Crimson clover + 75%Ryegrass,NEEDS_CONFIRMATION,Mixture,,Double Species,3,0,25%Crimson clover + 75%Ryegrass,not_attempted
+Oat + Vetch,NEEDS_CONFIRMATION,Mixture,,Double Species,2,3,Oat + Vetch; oat + vetch,not_attempted
+Cereal Rye + Hairy Vetch,NEEDS_CONFIRMATION,Mixture,,Double Species,2,3,Ceral Rye + Hairy Vetch; Ceral Rye + Hariy Vetch; Cereal Rye/Hairy Vetch; cereal rye & hairy vetch,not_attempted
+Rye + Hairy Vetch,NEEDS_CONFIRMATION,Mixture,,Double Species,2,3,Rye + Hairy Vetch; Rye+Hairy Vetch,not_attempted
+Guinea grass,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Guinea grass,not_attempted
+Palisade grass,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Palisade grass,not_attempted
+Crotalaria spectabilis,NEEDS_CONFIRMATION,Legume,,Single Species,2,0,Crotalaria spectabilis,not_attempted
+Stylosantes capitata + S. macrocephala,NEEDS_CONFIRMATION,Mixture,,Double Species,2,0,Stylosantes capitata + S. macrocephala,not_attempted
+Wheat+Hairy Vetch,NEEDS_CONFIRMATION,Mixture,,Double Species,2,0,Wheat+Hairy Vetch,not_attempted
+Black Oat & Lupine,NEEDS_CONFIRMATION,Mixture,,Double Species,2,0,Black Oat & Lupine,not_attempted
+Blue Lupin,NEEDS_CONFIRMATION,Legume,,Single Species,2,0,Blue Lupin,not_attempted
+Buckwheat,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Buckwheat,not_attempted
+Agrostemma (Corn Cockle),NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Agrostemma (Corn Cockle),not_attempted
+Grass pea,NEEDS_CONFIRMATION,Legume,,Single Species,2,0,Grass pea,not_attempted
+Kidney vetch,NEEDS_CONFIRMATION,Legume,,Single Species,2,0,Kidney vetch,not_attempted
+Guizotia abyssinica,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Guizotia abyssinica,not_attempted
+Phacelia,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Phacelia,not_attempted
+Quinoa,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Quinoa,not_attempted
+Sorghum × Sudan grass,NEEDS_CONFIRMATION,Mixture,,Double Species,2,0,Sorghum × Sudan grass,not_attempted
+Milk vetch,NEEDS_CONFIRMATION,Legume,,Single Species,2,0,Milk vetch,not_attempted
+Garlic,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Garlic,not_attempted
+Rye + Vetch + Radish,NEEDS_CONFIRMATION,Mixture,,Mixture,2,0,Rye + Vetch + Radish,not_attempted
+cereal rye + austrian winter pea + crimson clover,NEEDS_CONFIRMATION,Mixture,,Mixture,2,0,cereal rye + austrian winter pea + crimson clover,not_attempted
+Winter Turnip,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,Winter Turnip,not_attempted
+Brassica clover,NEEDS_CONFIRMATION,Legume,,Single Species,2,0,Brassica clover,not_attempted
+White mustard,NEEDS_CONFIRMATION,Non-legume,,Single Species,2,0,White mustard,not_attempted
+Cereal Rye + Crimson Clover,NEEDS_CONFIRMATION,Mixture,,Double Species,2,0,Cereal Rye/Crimon Clover; cereal rye & crimson clover,not_attempted
+Velvet Bean,NEEDS_CONFIRMATION,Legume,,Single Species,1,2,Velvet Bean; velvet bean,not_attempted
+"cereal rye, common oat, crimson clover,hairy vetch, and daikon radish",NEEDS_CONFIRMATION,Mixture,,Mixture,1,0,"cereal rye, common oat, crimson clover,hairy vetch, and daikon radish",not_attempted
+Sunflower,NEEDS_CONFIRMATION,Non-legume,,Single Species,1,0,Sunflower,not_attempted
+Forage Sorghum,NEEDS_CONFIRMATION,Non-legume,,Single Species,1,0,Forage Sorghum,not_attempted
+winter rye & hairy vetch,NEEDS_CONFIRMATION,Mixture,,Double Species,1,0,winter rye & hairy vetch,not_attempted
+"cereal rye, whole oats, purple top turnips, daikon radish, and crimson clover",NEEDS_CONFIRMATION,Mixture,,Mixture,1,0,"cereal rye, whole oats, purple top turnips, daikon radish, and crimson clover",not_attempted
+"cereal rye, crimson clover, and seven-top turnip",NEEDS_CONFIRMATION,Mixture,,Mixture,1,0,"cereal rye, crimson clover, and seven-top turnip",not_attempted
+black-seeded oats and Austrian winter peas,NEEDS_CONFIRMATION,Mixture,,Double Species,1,0,black-seeded oats and Austrian winter peas,not_attempted
+Oat & Pea,NEEDS_CONFIRMATION,Mixture,,Double Species,1,0,Oat & Pea,not_attempted
+6 species mixture,NEEDS_CONFIRMATION,Mixture,,Mixture,1,0,6 species mixture,not_attempted
+12 species mixture,NEEDS_CONFIRMATION,Mixture,,Mixture,1,0,12 species mixture,not_attempted
+white Hoary Pea,NEEDS_CONFIRMATION,Legume,,Single Species,1,0,white Hoary Pea,not_attempted
+Fish poison bean,NEEDS_CONFIRMATION,Legume,,Single Species,1,0,Fish poison bean,not_attempted
+Devil bean,NEEDS_CONFIRMATION,Legume,,Single Species,1,0,Devil bean,not_attempted
+Signalgrass,NEEDS_CONFIRMATION,Non-legume,,Single Species,1,0,Signalgrass,not_attempted
+Sweet clover,NEEDS_CONFIRMATION,Legume,,Single Species,1,0,Sweet clover,not_attempted
+Spring Oat,NEEDS_CONFIRMATION,Non-legume,,Single Species,1,0,Spring Oat,not_attempted
+Spring Triticale,NEEDS_CONFIRMATION,Non-legume,,Single Species,1,0,Spring Triticale,not_attempted
+Forage Pea,NEEDS_CONFIRMATION,Legume,,Single Species,1,0,Forage Pea,not_attempted
+"alfalfa, hairy vetch, oat, and oilseed radish",NEEDS_CONFIRMATION,Mixture,,Mixture,1,0,"alfalfa, hairy vetch, oat, and oilseed radish",not_attempted
+Green Gram,NEEDS_CONFIRMATION,Legume,,,0,12,Green Gram,not_attempted
+Barley & Hairy Vetch,NEEDS_CONFIRMATION,Mixture,,,0,11,Barley & Hairy Vetch,not_attempted
+hairy vetch & australian winter pea,NEEDS_CONFIRMATION,Mixture,,,0,6,hairy vetch & australian winter pea,not_attempted
+cereal rye (158 kg ha−1),NEEDS_CONFIRMATION,Non-legume,,,0,6,cereal rye (158 kg ha−1),not_attempted
+"annual ryegrass + Dwarf Essex rapeseed + crimson clover (winter hardy: 28, 9, 2 kg/ha)",NEEDS_CONFIRMATION,Mixture,,,0,6,"annual ryegrass + Dwarf Essex rapeseed + crimson clover (winter hardy: 28, 9, 2 kg/ha)",not_attempted
+oat+winter pea+radish (winter killed 9 + 1.5 + 4.5 kg/ha),NEEDS_CONFIRMATION,Mixture,,,0,6,oat+winter pea+radish (winter killed 9 + 1.5 + 4.5 kg/ha),not_attempted
+Rye + Oats,NEEDS_CONFIRMATION,Mixture,,,0,4,Rye + Oats,not_attempted
+field peas/winter wheat,NEEDS_CONFIRMATION,Mixture,,,0,4,field peas/winter wheat,not_attempted
+Fodder Raddish,NEEDS_CONFIRMATION,Non-legume,,,0,3,Fodder Raddish,not_attempted
+chinese milk vetch,NEEDS_CONFIRMATION,Legume,,,0,2,chinese milk vetch,not_attempted
+Mucuna pruriens,NEEDS_CONFIRMATION,Legume,,,0,2,Mucuna pruriens,not_attempted
+Ryegrass + Chicory + Clover,NEEDS_CONFIRMATION,Mixture,,,0,2,Ryegrass + Chicory + Clover,not_attempted
+Pearl Millet,NEEDS_CONFIRMATION,Non-legume,,,0,2,Pearl Millet,not_attempted
+Dwarf Pigeonpea,NEEDS_CONFIRMATION,Legume,,,0,2,Dwarf Pigeonpea,not_attempted
+Showy Rattlebox,NEEDS_CONFIRMATION,Legume,,,0,2,Showy Rattlebox,not_attempted
+Jack Bean,NEEDS_CONFIRMATION,Legume,,,0,2,Jack Bean,not_attempted
+Faba bean,NEEDS_CONFIRMATION,Legume,,,0,2,Faba bean,not_attempted
+Winter Legume cc after W and M phase,NEEDS_CONFIRMATION,Legume,,,0,1,Winter Legume cc after W and M phase,not_attempted
+Galega,NEEDS_CONFIRMATION,Legume,,,0,1,Galega,not_attempted
+Reed canary grass,NEEDS_CONFIRMATION,Non-legume,,,0,1,Reed canary grass,not_attempted
+C.Bluegrass,NEEDS_CONFIRMATION,Non-legume,,,0,1,C.Bluegrass,not_attempted

@@ -447,8 +447,18 @@ def classify_response_type(abstract_text: str, results_text: Optional[str], cfg=
 # ═══════════════════════════ Step 6a: Enumerate experimental units (LLM) ══
 
 UNIT_DESIGN_FIELDS = ["cc_species", "cc_species_scientific", "cc_type", "cc_category",
-                      "year", "grain_crop_raw", "cc_planting_time_raw", "cc_terminating_time_raw",
-                      "location"]
+                      "year", "cc_years_practiced", "grain_crop_raw", "cc_planting_time_raw",
+                      "cc_terminating_time_raw", "location"]
+
+# Fields a single experimental unit MAY override for its own physical site,
+# when a paper describes two or more sites/farms under DIFFERENT
+# management (e.g. an "East" site with conventional tillage/fertilizer vs
+# a "West" site left unfertilized). assemble_rows() merges shared_fields
+# then the unit on top, so a value set here for one unit wins over the
+# paper-wide value from 6b for that row only; left null for a single-site
+# paper, where the shared value is used for every row as before.
+SITE_VARIABLE_FIELDS = ["location", "tillage_type_raw", "fertilize_raw", "herbicide_raw",
+                        "irrigation_raw", "soil_texture_raw", "latitude", "longitude"]
 
 
 def enumerate_experimental_units(
@@ -466,11 +476,14 @@ def enumerate_experimental_units(
     response variable (yield, one gas, SOC, one nitrogen metric).
 
     Returns a list of dicts of ExtractedField, each holding the design
-    fields that differ between rows (cc_species, cc_type, year, ...) plus
-    the Block 2 values for that unit's response variable
-    ({prefix}cc_mean / {prefix}control_mean / _sd / _unit / _n and
-    gas_type / nitrogen_type). Shared Block 1 fields are NOT repeated
-    here — assemble_rows() merges them in.
+    fields that differ between rows (cc_species, cc_type, year,
+    cc_years_practiced, ...) plus the Block 2 values for that unit's
+    response variable ({prefix}cc_mean / {prefix}control_mean / _sd /
+    _unit / _n and gas_type / nitrogen_type). Shared Block 1 fields are
+    NOT repeated here — assemble_rows() merges them in, UNLESS a unit
+    sets one of SITE_VARIABLE_FIELDS to override the shared value for a
+    paper with multiple physically distinct sites under different
+    management (unit wins on merge — see assemble_rows()).
     """
     from src import llm_client
 
@@ -504,9 +517,18 @@ def enumerate_experimental_units(
         "Every row must pair a cover-crop value with the matching no-cover-crop control value "
         "from the same year/site/factor level. If a value only appears in a figure, set it to "
         "null and put the figure reference (e.g. 'Fig. 3') in evidence.\n\n"
+        "COVER CROP YEARS: set cc_years_practiced to EVERY calendar year the cover crop was "
+        "actually planted/grown for this unit, comma-separated (e.g. '2016,2017') -- this can "
+        "differ from `year` (the single year THIS row's response value was measured in).\n\n"
+        "MULTIPLE PHYSICAL SITES: if the paper describes two or more sites/farms/fields under "
+        "DIFFERENT management (e.g. an 'East' site with conventional tillage and a pre-plant "
+        "herbicide vs a 'West' site left unfertilized both years), give each unit its OWN "
+        f"{', '.join(SITE_VARIABLE_FIELDS)} values for its actual site -- do NOT blend two "
+        "sites' management into one ambiguous row. Leave these null for a single-site paper "
+        "(the paper-wide value from Methods is used instead).\n\n"
         f"Gazetteer species found in the text (hints only, decide from the design):\n{cand_txt}\n\n"
         f"Per-row fields to fill (null if the paper does not state it):\n"
-        f"{_field_descriptions(schema, UNIT_DESIGN_FIELDS + value_fields)}\n\n"
+        f"{_field_descriptions(schema, UNIT_DESIGN_FIELDS + SITE_VARIABLE_FIELDS + value_fields)}\n\n"
         f"METHODS:\n{_truncate(methods_text, 30000)}\n\n"
         f"RESULTS:\n{_truncate(results_text, 30000)}\n\n"
         "Answer as JSON: {\"units\": [ {\"<field>\": {\"value\": ..., \"confidence\": \"high|medium|low\", "
@@ -727,6 +749,29 @@ def compute_response_ratios(row: dict[str, ExtractedField]) -> dict[str, Extract
     return computed
 
 
+def compute_cc_duration(row: dict[str, ExtractedField]) -> dict[str, ExtractedField]:
+    """
+    AGENTS.md step 11. Pure arithmetic, no LLM: cc_duration_years =
+    count of distinct calendar years in cc_years_practiced (e.g.
+    "2016,2017" -> 2, "2016, 2017 ,2016" -> 2). Absent/blank
+    cc_years_practiced -> no field produced (never fabricate a count
+    from nothing).
+    """
+    ef = row.get("cc_years_practiced")
+    if ef is None or ef.value in (None, ""):
+        return {}
+    years = {y.strip() for y in str(ef.value).split(",") if y.strip()}
+    if not years:
+        return {}
+    return {
+        "cc_duration_years": ExtractedField(
+            len(years), ef.confidence,
+            f"computed: distinct years in cc_years_practiced ({ef.value})",
+            "computed_downstream",
+        )
+    }
+
+
 # ═══════════════════════════ Step 10: Validate ════════════════════════════
 
 def validate_with_apis(row: dict[str, ExtractedField], data_catalog: dict) -> list[str]:
@@ -797,7 +842,12 @@ def assemble_row(paper: PaperSpec, all_fields: dict[str, ExtractedField], schema
                 if field_def.get("extraction_method") != "computed_downstream":
                     row[f"{name}_confidence"] = ef.confidence
                     row[f"{name}_source"] = ef.source
-            else:
+            elif name not in row:
+                # don't clobber identity fields pre-seeded above (pdf_path,
+                # paper_id) just because no extraction stage populated them
+                # under this name -- paper_id has extraction_method
+                # manual_existing and is never in all_fields, so without
+                # this guard every row's paper_id silently reset to None.
                 row[name] = None
     return row
 
@@ -820,6 +870,7 @@ def assemble_rows(paper: PaperSpec, shared_fields: dict[str, ExtractedField],
         merged: dict[str, ExtractedField] = {**shared_fields, **{k: v for k, v in unit.items() if not k.startswith("_")}}
         merged.update(normalize_fields(merged, schema))
         merged.update(compute_response_ratios(merged))
+        merged.update(compute_cc_duration(merged))
         flags = sanity_check_row(merged)
         extra = {"unit_index": i, "n_units_in_paper": len(unit_list), "review_flags": "; ".join(flags) or None}
         rows.append(assemble_row(paper, merged, schema, include_proposed=include_proposed, extra=extra))
@@ -971,6 +1022,13 @@ def _write_output(rows: list[dict], output_dir: Path, name: str) -> Path:
     breaks the NEXT run's read below. A pre-existing file that fails to
     parse (empty, truncated by a prior crash) is treated as absent rather
     than raised, so one bad file never blocks a fresh run.
+
+    De-duplicates exact-duplicate rows after appending (re-running the
+    same PDF through the same project appends identical rows otherwise —
+    found via a real run on franco2021.pdf). This only catches EXACT
+    duplicates (every column equal); it is not a semantic "same paper"
+    dedup, since two genuinely different rows can legitimately share a
+    paper_id.
     """
     import pandas as pd
 
@@ -985,5 +1043,6 @@ def _write_output(rows: list[dict], output_dir: Path, name: str) -> Path:
             df = pd.concat([existing, df], ignore_index=True)
         except pd.errors.EmptyDataError:
             pass  # prior run left an empty/corrupt file — start fresh
+    df = df.drop_duplicates().reset_index(drop=True)
     df.to_csv(out_path, index=False)
     return out_path

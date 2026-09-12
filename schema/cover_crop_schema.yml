@@ -263,6 +263,30 @@ fields:
         FIELD for the extraction pipeline, same confidence/source
         tracking approach as the Book4.xlsx year-extraction work.
 
+    - name: cc_years_practiced
+      type: string
+      nullable: true
+      status: proposed_new
+      extraction_method: narrow_llm
+      description: >
+        Every distinct calendar year the cover crop was actually
+        practiced in this experimental unit, comma-separated (e.g.
+        "2016,2017"). Distinct from `year` (the single measurement
+        year for THIS row's response variable) — a paper can run a CC
+        treatment across multiple years while a given response value
+        is reported for only one of them. Per-unit (set in step 6a),
+        not paper-wide.
+
+    - name: cc_duration_years
+      type: integer
+      nullable: true
+      status: proposed_new
+      extraction_method: computed_downstream
+      description: >
+        Count of distinct years in cc_years_practiced (e.g. "2016,2017"
+        -> 2). Pure arithmetic on that field, never LLM-produced — see
+        compute_cc_duration() in step 11.
+
     - name: cc_planting_time_raw
       source_column: "CCs Planting Time"
       type: string

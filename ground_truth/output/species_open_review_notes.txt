@@ -1,0 +1,5 @@
+RESOLVED 2026-09-11 by Yu Peng: "Rye" / "Cereal Rye" / "Winter Rye" (and
+their mixture combos) are kept as separate, distinct entries in
+species_normalization_table.csv -- not merged. See
+species_merge_decisions.csv for the two pairs this affected (now marked
+KEPT_SEPARATE).

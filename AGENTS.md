@@ -84,9 +84,19 @@ quote) and re-runnable by someone else.
      species/year/… plus the `{block}_cc_mean / _control_mean / _sd /
      _unit / _n` values and `gas_type` / `nitrogen_type`. Species that
      appear only as cash crops or rotation partners are not rows.
+     `cc_years_practiced` (every calendar year CC was actually practiced,
+     e.g. "2016,2017") is also per-unit. **Multiple physical sites**: if
+     the paper describes two or more sites/farms under DIFFERENT
+     management, a unit MAY also carry its own `location` /
+     `tillage_type_raw` / `fertilize_raw` / `herbicide_raw` /
+     `irrigation_raw` / `soil_texture_raw` / `latitude` / `longitude` —
+     see `SITE_VARIABLE_FIELDS` — overriding the paper-wide value from 6b
+     for that row only (step 11 merges shared-then-unit, unit wins).
+     Leave these null for a single-site paper; the shared value is used.
    - 6b `extract_narrow_llm()` — Methods text → the paper-level Block 1
      `narrow_llm` fields step 4 didn't fill (country, location,
-     irrigation_raw, soil_texture_raw, …), shared by every row.
+     irrigation_raw, soil_texture_raw, …), used by every row UNLESS a
+     unit from 6a overrides it for a multi-site paper (see above).
 7. **Vision extraction, only if needed** — `extract_vision_llm()`. Trigger
    ONLY when a unit's value came back null with a figure reference in its
    evidence (e.g. "Fig. 3") — render that PDF page to an image (code, no
@@ -113,8 +123,11 @@ quote) and re-runnable by someone else.
     When step 4's regex value and step 6's LLM value disagree on the same
     field, do not silently prefer one — flag for human review.
 11. **Confidence-tag and assemble the rows** — `assemble_rows()`. Shared
-    Block 1 fields are merged into every unit from step 6a; steps 8-9
-    run per row. Every
+    Block 1 fields are merged into every unit from step 6a (unit value
+    wins on conflict — this is how a multi-site paper's per-site
+    overrides from 6a take effect); steps 8-9 run per row, plus
+    `compute_cc_duration()` (count of distinct years in
+    `cc_years_practiced` → `cc_duration_years`). Every
     extracted field gets a `high` / `medium` / `low` confidence and a
     one-line source note, same convention as the prior Book4.xlsx
     year-extraction pass: `high` = deterministic match or a verbatim

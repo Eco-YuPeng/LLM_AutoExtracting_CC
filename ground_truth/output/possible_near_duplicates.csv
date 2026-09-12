@@ -1,0 +1,25 @@
+entry_a,entry_b,similarity
+Ceral Rye + Hariy Vetch,Ceral Rye + Hairy Vetch,0.957
+Sunnhemp,Sunn Hemp,0.941
+Rye+Hairy Vetch,Rye + Hairy Vetch,0.938
+cereal rye & hairy vetch,Ceral Rye + Hairy Vetch,0.936
+50%Crimson clover + 50%Ryegrass,25%Crimson clover + 75%Ryegrass,0.935
+75%Crimson clover + 25%Ryegrass,50%Crimson clover + 50%Ryegrass,0.935
+75%Crimson clover + 25%Ryegrass,25%Crimson clover + 75%Ryegrass,0.935
+6 species mixture,12 species mixture,0.914
+Cereal Rye/Hairy Vetch,cereal rye & hairy vetch,0.913
+Cereal Rye/Crimon Clover,cereal rye & crimson clover,0.902
+Oilseed radish & Rye,Oilseed radish+Rye,0.895
+cereal rye & hairy vetch,Ceral Rye + Hariy Vetch,0.894
+Cereal Rye/Hairy Vetch,Ceral Rye + Hairy Vetch,0.889
+Oilseed Radish,Oilseed radish+Rye,0.875
+white clover + ryegrass,red clover + ryegrass,0.864
+Winter Rye,Winter Rape,0.857
+Ceral Rye + Hairy Vetch,Rye + Hairy Vetch,0.85
+Pea & Canola,pea and canola,0.846
+Hairy Vetch,Rye+Hairy Vetch,0.846
+Cereal Rye/Hairy Vetch,Ceral Rye + Hariy Vetch,0.844
+Mustard & Vetch,Mustard & Vetch & Rye,0.833
+winter rye & hairy vetch,cereal rye & hairy vetch,0.833
+pea and canola,"pea, oat, and canola",0.824
+Oilseed Radish,Oilseed radish & Rye,0.824
