@@ -25,3 +25,10 @@ ground_truth/pdfs/
 # reading from here, see ground_truth/README.md) but not pushed to
 # GitHub, even though this repo is private (2026-09-15).
 ground_truth/source_data/
+
+# Ad hoc / scratch outputs from one-off scoring runs and commit-message
+# drafts -- reproducible, not deliverables, accidentally committed once
+# (2026-09-15 cleanup).
+.commit_msg*.txt
+ground_truth/output/scoring_run_*/
+ground_truth/output/*_available11.csv
