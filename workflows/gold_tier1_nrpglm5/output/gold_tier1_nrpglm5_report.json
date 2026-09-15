@@ -1,0 +1,9 @@
+[
+  {
+    "pdf": "/Users/yupe4788/Library/CloudStorage/OneDrive-UCB-O365/Documents/GitHub/LLM_AutoExtracting_CC/ground_truth/pdfs/14_chirinda2010.pdf",
+    "status": "failed",
+    "notes": [
+      "RuntimeError(\"LLM call 'classify_response_type' failed after 4 attempts (max_tokens up to 8000): APITimeoutError('Request timed out.')\")"
+    ]
+  }
+]

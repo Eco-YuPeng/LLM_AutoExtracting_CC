@@ -1,0 +1,126 @@
+[
+  {
+    "pdf": "/Users/yupe4788/Library/CloudStorage/OneDrive-UCB-O365/Documents/GitHub/LLM_AutoExtracting_CC/ground_truth/pdfs/41_thomas2017.pdf",
+    "status": "ok",
+    "notes": [],
+    "fallback_used": null,
+    "methods_chars": 46857,
+    "results_chars": 0,
+    "species_candidates": [
+      {
+        "matched_name": "Rye",
+        "scientific_name": "Secale cereale",
+        "cc_category": "Non-legume",
+        "family": "Poaceae",
+        "mentions": 31
+      },
+      {
+        "matched_name": "Oilseed radish",
+        "scientific_name": "Raphanus sativus",
+        "cc_category": "Non-legume",
+        "family": "Brassicaceae",
+        "mentions": 27
+      },
+      {
+        "matched_name": "Wheat",
+        "scientific_name": "Triticum aestivum",
+        "cc_category": "Non-legume",
+        "family": "Poaceae",
+        "mentions": 4
+      },
+      {
+        "matched_name": "Soybean",
+        "scientific_name": "Glycine max",
+        "cc_category": "Legume",
+        "family": "Fabaceae",
+        "mentions": 2
+      },
+      {
+        "matched_name": "Red Clover",
+        "scientific_name": "Trifolium pratense",
+        "cc_category": "Legume",
+        "family": "Fabaceae",
+        "mentions": 1
+      }
+    ],
+    "response_types": [
+      "ghg_n2o"
+    ],
+    "design_summary": "3 cover\u2011crop types (oilseed radish, fall rye, no cover) \u00d7 2 fertilizer sources (compost, inorganic) across 2 non\u2011growing seasons at a single Lethbridge field site",
+    "llm_calls": [
+      {
+        "purpose": "classify_response_type",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 3.59,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 1349,
+        "completion_tokens": 410,
+        "reasoning_chars": 1336,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[country,location,ccs_year_duration,cc_rotation_raw]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 7.5,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 8295,
+        "completion_tokens": 971,
+        "reasoning_chars": 3028,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[grain_crop_rotation_raw,tillage_type_raw,fertilize_raw,grain_crop_n_rate_raw]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 4.28,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 8278,
+        "completion_tokens": 584,
+        "reasoning_chars": 1740,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[herbicide_raw,irrigation_raw,soil_texture_raw,annual_precipitation_mm]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 3.68,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 8289,
+        "completion_tokens": 507,
+        "reasoning_chars": 1165,
+        "image": null
+      },
+      {
+        "purpose": "extract_narrow_llm[annual_temperature_c,notes]",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 2.97,
+        "finish_reason": "stop",
+        "max_tokens_used": 8000,
+        "prompt_tokens": 8212,
+        "completion_tokens": 332,
+        "reasoning_chars": 901,
+        "image": null
+      },
+      {
+        "purpose": "enumerate_experimental_units",
+        "model": "js2/gpt-oss-120b",
+        "attempt": 1,
+        "seconds": 58.79,
+        "finish_reason": "stop",
+        "max_tokens_used": 16000,
+        "prompt_tokens": 9619,
+        "completion_tokens": 9720,
+        "reasoning_chars": 11061,
+        "image": null
+      }
+    ],
+    "n_rows": 8
+  }
+]

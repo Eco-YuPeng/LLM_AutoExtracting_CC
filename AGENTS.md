@@ -62,7 +62,13 @@ quote) and re-runnable by someone else.
    that's insufficient too, scan the full text but cap confidence at
    `low` for any field found this way (full-text scanning has a higher
    false-positive rate — e.g. picking up a coordinate cited from a
-   different study in the Discussion section).
+   different study in the Discussion section). Results ends at
+   Discussion/Conclusions/Acknowledgments OR References/Literature Cited
+   — whichever heading comes first — so Discussion narrative and the
+   reference list are never fed to the Block 2 (Results) extraction
+   steps, per Yu Peng's 2026-09-14 scoping call (only Methods+Results
+   text is needed for extraction; Discussion/References add noise and
+   token cost without new facts).
 4. **Deterministic extraction (Block 1)** — `extract_deterministic()`.
    Regex/gazetteer only, zero LLM tokens. Covers every schema field with
    `extraction_method: regex` or `gazetteer`. Do not re-ask the LLM for a
@@ -93,6 +99,22 @@ quote) and re-runnable by someone else.
      see `SITE_VARIABLE_FIELDS` — overriding the paper-wide value from 6b
      for that row only (step 11 merges shared-then-unit, unit wins).
      Leave these null for a single-site paper; the shared value is used.
+     **Called once per response-type BLOCK, not once for the whole
+     paper**: `group_response_types_by_block()` groups the detected
+     response types by schema block first (all GHG gases stay together
+     — they usually share one results table — but yield/ghg/soc/nitrogen
+     are separate calls), so a paper reporting e.g. both yield and
+     nitrogen gets two smaller calls instead of one call whose combined
+     output can blow past the token budget (this truncated a real run,
+     2026-09). **Row-independence rules** (Yu Peng, 2026-09-14, baked
+     into the prompt): a design combination is its own row ONLY if
+     RESULTS independently presents it (its own reported value, or an
+     explicit side-by-side comparison) — never a combination only
+     described in Methods; a stated replicate/block count is repeated
+     plots of the SAME treatment, never a separate row; a multi-year
+     value reported only as an average (no separate per-year numbers in
+     the text) is ONE row with a year-range value (e.g. "2017-2019"),
+     never fabricated per-year splits.
    - 6b `extract_narrow_llm()` — Methods text → the paper-level Block 1
      `narrow_llm` fields step 4 didn't fill (country, location,
      irrigation_raw, soil_texture_raw, …), used by every row UNLESS a

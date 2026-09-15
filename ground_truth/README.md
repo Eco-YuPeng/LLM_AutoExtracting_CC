@@ -1,6 +1,16 @@
 # Ground truth: sources, tiering, and derived tables
 
-## Source files (on OneDrive, "CC maps" project folder — not copied into this repo)
+## Source files (`ground_truth/source_data/` — committed to git, 2026-09-15)
+
+These used to live only on OneDrive at a hardcoded per-machine path,
+which broke every time OneDrive hadn't fully synced/hydrated the file
+locally (Files On-Demand placeholder) or on a different machine
+entirely. Per Yu Peng (2026-09-15), copied into the repo instead — this
+repo is private, and these are Yu Peng's own curated spreadsheets, not
+copyrighted third-party material (unlike `ground_truth/pdfs/`, which
+stays gitignored for exactly that reason). All scripts still honor
+`GHG_XLSX_PATH` / `YIELD_XLSX_PATH` env var overrides if you ever need
+to point at a different copy.
 
 - **YieldTable.xlsx** ("Yield Record" sheet) — 1026 rows, 91 papers
   (Dataset One: 290 rows / 28 papers, no `Paper ID`; Dataset Two: 736
@@ -8,10 +18,12 @@
 - **GHG.xlsx** ("Deduplicated" sheet) — **the authoritative GHG ground
   truth**, 489 rows, 112 papers, clean `paper_id` for every row.
   Confirmed 2026-09-11: **GHGTable.xlsx is deprecated** — do not read
-  from it in any script or eval going forward. GHG.xlsx's other sheets
-  (Sheet1, Prior MetaData Cleaning Record, Prior Meta Paper List,
-  Original Meta, Dictionary, Sheet2, Sheet3) are process/audit trail
-  that feeds "Deduplicated" — never a data source on their own.
+  from it in any script or eval going forward (also why it was NOT
+  copied into `source_data/` alongside the two files above — no script
+  reads it, so there was nothing to fix a path for). GHG.xlsx's other
+  sheets (Sheet1, Prior MetaData Cleaning Record, Prior Meta Paper
+  List, Original Meta, Dictionary, Sheet2, Sheet3) are process/audit
+  trail that feeds "Deduplicated" — never a data source on their own.
 
 **No paper overlaps between YieldTable and GHG.xlsx** — confirmed by
 `match_papers.py` (0/91 matches, using a clean `paper_id` key on the
@@ -99,8 +111,9 @@ python ground_truth/scripts/build_review_files.py
 python ground_truth/scripts/extract_gold_tier1.py
 ```
 
-Each accepts `GHG_XLSX_PATH` / `YIELD_XLSX_PATH` env vars if the source
-files aren't at the hardcoded OneDrive default path.
+Each defaults to reading from `ground_truth/source_data/` (committed to
+git); pass `GHG_XLSX_PATH` / `YIELD_XLSX_PATH` env vars to point at a
+different copy instead.
 
 ## Output files
 

@@ -1,0 +1,4 @@
+pipeline_step,n_fields,n_scored,n_match,accuracy,precision,recall,f1
+6a/6b (narrow LLM),16,493,53,0.108,0.214,0.126,0.159
+9/11 (pure computation),1,27,6,0.222,0.286,0.316,0.3
+4 (deterministic),6,265,87,0.328,0.69,0.328,0.445

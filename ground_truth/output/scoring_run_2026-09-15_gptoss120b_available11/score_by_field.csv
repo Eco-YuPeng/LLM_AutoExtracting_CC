@@ -1,0 +1,24 @@
+field,pipeline_step,extraction_method,n_scored,n_match,n_mismatch,n_pipeline_missed,n_gold_blank_pipeline_filled,accuracy,precision,recall,f1
+doi,4 (deterministic),regex,45,0,21,24,0,0.0,0.0,0.0,
+location,6a/6b (narrow LLM),narrow_llm,45,0,21,24,0,0.0,0.0,0.0,
+fertilize_raw,6a/6b (narrow LLM),narrow_llm,29,0,13,10,6,0.0,0.0,0.0,
+ghg_unit,6a/6b (narrow LLM),narrow_llm,29,0,13,8,8,0.0,0.0,0.0,
+tillage_type_raw,6a/6b (narrow LLM),narrow_llm,29,0,1,22,6,0.0,0.0,0.0,
+year,6a/6b (narrow LLM),narrow_llm,29,0,13,8,8,0.0,0.0,0.0,
+cc_terminating_time_raw,6a/6b (narrow LLM),narrow_llm,27,0,0,19,8,0.0,0.0,0.0,
+ghg_cc_sd,6a/6b (narrow LLM),narrow_llm,23,0,2,21,0,0.0,0.0,0.0,
+ghg_control_sd,6a/6b (narrow LLM),narrow_llm,23,0,2,21,0,0.0,0.0,0.0,
+cc_planting_time_raw,6a/6b (narrow LLM),narrow_llm,16,0,1,7,8,0.0,0.0,0.0,
+irrigation_raw,6a/6b (narrow LLM),narrow_llm,13,0,0,0,13,0.0,0.0,,
+soil_texture_raw,6a/6b (narrow LLM),narrow_llm,22,1,12,1,8,0.045,0.048,0.071,0.057
+ghg_cc_mean,6a/6b (narrow LLM),narrow_llm,45,6,15,24,0,0.133,0.286,0.133,0.182
+ghg_control_mean,6a/6b (narrow LLM),narrow_llm,45,6,15,24,0,0.133,0.286,0.133,0.182
+grain_crop_raw,6a/6b (narrow LLM),narrow_llm,45,7,14,24,0,0.156,0.333,0.156,0.212
+cc_species,4 (deterministic),gazetteer,40,8,13,19,0,0.2,0.381,0.2,0.262
+cc_duration_years,9/11 (pure computation),computed_downstream,27,6,7,6,8,0.222,0.286,0.316,0.3
+latitude,4 (deterministic),regex,45,19,2,24,0,0.422,0.905,0.422,0.576
+longitude,4 (deterministic),regex,45,19,2,24,0,0.422,0.905,0.422,0.576
+ghg_n,6a/6b (narrow LLM),narrow_llm,28,12,0,8,8,0.429,0.6,0.6,0.6
+cc_category,4 (deterministic),gazetteer,45,20,1,24,0,0.444,0.952,0.444,0.606
+country,4 (deterministic),gazetteer,45,21,0,24,0,0.467,1.0,0.467,0.636
+gas_type,6a/6b (narrow LLM),narrow_llm,45,21,0,24,0,0.467,1.0,0.467,0.636

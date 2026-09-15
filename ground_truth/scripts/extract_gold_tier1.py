@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import pandas as pd
 
-_DEFAULT_DIR = "/Users/yupe4788/Library/CloudStorage/OneDrive-UCB-O365/1.Research 4.49.41 PM/1. Main Project/7. CC maps"
+_DEFAULT_DIR = str(Path(__file__).resolve().parents[1] / "source_data")  # ground_truth/source_data/ -- committed to git (2026-09-15), see ground_truth/README.md
 GHG_XLSX = os.environ.get("GHG_XLSX_PATH", f"{_DEFAULT_DIR}/GHG.xlsx")
 OUT_DIR = Path(__file__).resolve().parents[1] / "output"
 

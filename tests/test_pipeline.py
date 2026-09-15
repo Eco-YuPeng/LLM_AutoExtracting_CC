@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src import llm_client  # noqa: E402
 from src.literature_extractor import (  # noqa: E402
     ExtractedField,
+    ExtractionWorkflow,
     PaperSpec,
     assemble_rows,
     classify_response_type,
@@ -22,8 +23,11 @@ from src.literature_extractor import (  # noqa: E402
     extract_deterministic,
     extract_narrow_llm,
     find_species_candidates,
+    group_response_types_by_block,
     load_data_catalog,
     load_schema,
+    locate_sections,
+    run_extraction,
     sanity_check_row,
 )
 
@@ -267,3 +271,185 @@ def test_parse_json_response_finds_real_json_after_inline_reasoning():
 def test_parse_json_response_ignores_braces_inside_string_values():
     tricky = 'blah {"note": "curly brace example: {not real}"} trailing text'
     assert llm_client.parse_json_response(tricky) == {"note": "curly brace example: {not real}"}
+
+
+# ── enumerate_experimental_units: block-grouping + row-independence rules ──
+# (methodology decisions from Yu Peng, 2026-09-14, added after a real
+# gold-eval run truncated on a paper with response_types=['yield', 'nitrogen'])
+
+def test_group_response_types_by_block_keeps_all_ghg_gases_together():
+    # All three gases share one schema block ("ghg") -- they usually come
+    # from the SAME results table, so they must stay in one group/call.
+    groups = group_response_types_by_block(["ghg_co2", "ghg_n2o", "ghg_ch4"])
+    assert groups == [["ghg_co2", "ghg_n2o", "ghg_ch4"]]
+
+
+def test_group_response_types_by_block_splits_unrelated_blocks():
+    # yield and nitrogen are different blocks/tables -- must become two
+    # separate groups so neither call has to enumerate both at once.
+    groups = group_response_types_by_block(["yield", "nitrogen"])
+    assert groups == [["yield"], ["nitrogen"]]
+
+
+def test_group_response_types_by_block_preserves_order_and_mixed_case():
+    # yield, then both GHG gases together, then soc -- three groups, GHG's
+    # two entries collapsed into one.
+    groups = group_response_types_by_block(["yield", "ghg_n2o", "ghg_co2", "soc"])
+    assert groups == [["yield"], ["ghg_n2o", "ghg_co2"], ["soc"]]
+
+
+def test_group_response_types_by_block_empty_input():
+    assert group_response_types_by_block([]) == []
+
+
+def test_enumerate_units_prompt_states_independence_rule(monkeypatch):
+    """The row-independence rule (a combination is only a row if RESULTS
+    independently presents it, not merely described in Methods) must
+    actually reach the model in the prompt text, not just live in a
+    code comment."""
+    schema = load_schema()
+    captured = {}
+
+    def fake_chat_json(system, user, *, purpose, cfg=None):
+        captured["user"] = user
+        return {"design_summary": "", "units": []}
+
+    monkeypatch.setattr(llm_client, "chat_json", fake_chat_json)
+    enumerate_experimental_units("m", "r", [], ["ghg_n2o"], schema)
+
+    assert "INDEPENDENCE RULE" in captured["user"]
+    assert "independently present" in captured["user"]
+
+
+def test_enumerate_units_prompt_states_replication_is_not_a_factor(monkeypatch):
+    schema = load_schema()
+    captured = {}
+
+    def fake_chat_json(system, user, *, purpose, cfg=None):
+        captured["user"] = user
+        return {"design_summary": "", "units": []}
+
+    monkeypatch.setattr(llm_client, "chat_json", fake_chat_json)
+    enumerate_experimental_units("m", "r", [], ["yield"], schema)
+    assert "REPLICATION IS NOT A FACTOR" in captured["user"]
+
+
+def test_enumerate_units_prompt_states_multi_year_average_rule(monkeypatch):
+    schema = load_schema()
+    captured = {}
+
+    def fake_chat_json(system, user, *, purpose, cfg=None):
+        captured["user"] = user
+        return {"design_summary": "", "units": []}
+
+    monkeypatch.setattr(llm_client, "chat_json", fake_chat_json)
+    enumerate_experimental_units("m", "r", [], ["soc"], schema)
+    assert "MULTI-YEAR AVERAGES" in captured["user"]
+
+
+# ── locate_sections: Results also stops at a bare References heading ──────
+
+def test_locate_sections_results_stops_at_references_when_no_discussion_heading():
+    md = (
+        "# Methods\nWe did methods things.\n\n"
+        "# Results\nWe found results things.\n\n"
+        "# References\nSmith 2020. Some paper.\n"
+    )
+    sections = locate_sections(md)
+    assert "results things" in sections["results"]
+    assert "Smith 2020" not in sections["results"]
+
+
+def test_locate_sections_results_still_stops_at_discussion_when_present():
+    # regression: adding References to the boundary pattern must not
+    # break the existing Discussion/Conclusion boundary.
+    md = (
+        "# Methods\nWe did methods things.\n\n"
+        "# Results\nWe found results things.\n\n"
+        "# Discussion\nThis means X.\n\n"
+        "# References\nSmith 2020.\n"
+    )
+    sections = locate_sections(md)
+    assert "results things" in sections["results"]
+    assert "This means X" not in sections["results"]
+    assert "Smith 2020" not in sections["results"]
+
+
+# ── enumerate_experimental_units: higher starting max_tokens floor ────────
+# (real gold-eval evidence, 2026-09: this call's default 8000-token budget
+# truncated on the FIRST attempt almost every time -- raise its own floor
+# instead of the global default other, smaller calls rely on staying low)
+
+def test_enumerate_units_raises_max_tokens_floor_when_default_is_low(monkeypatch):
+    captured = {}
+
+    def fake_chat_json(system, user, *, purpose, cfg=None):
+        captured["cfg"] = cfg
+        return {"design_summary": "", "units": []}
+
+    monkeypatch.setattr(llm_client, "chat_json", fake_chat_json)
+    schema = load_schema()
+    low_cfg = llm_client.LLMConfig(api_key="fake", max_tokens=8000)
+    enumerate_experimental_units("m", "r", [], ["yield"], schema, cfg=low_cfg)
+
+    assert captured["cfg"].max_tokens == 16000
+    assert low_cfg.max_tokens == 8000  # the caller's cfg object must not be mutated
+
+
+def test_enumerate_units_keeps_caller_max_tokens_when_already_higher(monkeypatch):
+    captured = {}
+
+    def fake_chat_json(system, user, *, purpose, cfg=None):
+        captured["cfg"] = cfg
+        return {"design_summary": "", "units": []}
+
+    monkeypatch.setattr(llm_client, "chat_json", fake_chat_json)
+    schema = load_schema()
+    high_cfg = llm_client.LLMConfig(api_key="fake", max_tokens=20000)
+    enumerate_experimental_units("m", "r", [], ["yield"], schema, cfg=high_cfg)
+
+    assert captured["cfg"].max_tokens == 20000  # left as-is, not lowered
+
+
+# ── run_extraction: report.json must not crash when a paper yields zero
+# rows and the output directory doesn't exist yet ─────────────────────────
+# (real bug from a live gold-eval run, 2026-09: after `rm -rf
+# workflows/<project>/`, the FIRST paper processed for a fresh project
+# that fails outright -- e.g. a timed-out LLM call -- produced rows=[],
+# and the report.json write below crashed with FileNotFoundError because
+# only _write_output() (called only `if rows`) used to create the
+# directory. That crash killed the whole run_extraction.py process
+# instead of the graceful "log it, skip it, keep going" AGENTS.md
+# promises for a single failed paper.)
+
+def test_run_extraction_writes_report_json_when_output_dir_does_not_exist_yet(tmp_path):
+    missing_pdf = tmp_path / "does_not_exist.pdf"  # check_pdf_readable() fails cleanly -> rows=[]
+    fresh_output_dir = tmp_path / "brand_new_project" / "output"
+    assert not fresh_output_dir.exists()
+
+    wf = ExtractionWorkflow(name="t", papers=[PaperSpec(pdf_path=missing_pdf)],
+                            output_dir=fresh_output_dir, verbose=False)
+    rows = run_extraction(wf, use_llm=False)
+
+    assert rows == []
+    assert (fresh_output_dir / "t_report.json").exists()
+
+
+def test_run_extraction_writes_report_json_after_a_paper_raises(tmp_path, monkeypatch):
+    # Same bug, via the OTHER path to rows=[] -- extract_paper() itself
+    # raising (e.g. an LLM call exhausting all retries), caught by
+    # run_extraction()'s own try/except.
+    import src.literature_extractor as le
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated LLM failure after 4 retries")
+
+    monkeypatch.setattr(le, "extract_paper", boom)
+    fresh_output_dir = tmp_path / "another_new_project" / "output"
+
+    wf = ExtractionWorkflow(name="t", papers=[PaperSpec(pdf_path=tmp_path / "x.pdf")],
+                            output_dir=fresh_output_dir, verbose=False)
+    rows = run_extraction(wf, use_llm=False)
+
+    assert rows == []
+    assert (fresh_output_dir / "t_report.json").exists()

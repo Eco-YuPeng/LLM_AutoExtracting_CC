@@ -1,0 +1,26 @@
+Fix GHG classification recall gap, add precision/recall scoring, move source data into repo
+
+- classify_response_type was truncating Results to 8000 chars, missing
+  the GHG paragraph entirely on 7/11 gold-eval papers whose Results run
+  13-18k chars; bumped to 30000 chars (matches enumerate_experimental_units).
+- score_pipeline_output.py now reports precision/recall/F1 per field/step
+  alongside the original blended accuracy, so a recall gap (upstream
+  detection miss) and a precision gap (hallucinated/wrong value) show up
+  as distinct signals instead of one conflated number.
+- build_gold_eval_ghg_table.py: ghg_n now maps to the source's
+  replications column (design-level, not gas-specific) instead of a
+  per-gas <gas>_n column that only existed for co2; dropped the
+  samplesize column entirely -- it was a constant 3 for every row,
+  an unverified placeholder, not real per-paper data.
+- Moved GHG.xlsx/YieldTable.xlsx out of a hardcoded per-machine OneDrive
+  path into ground_truth/source_data/ (gitignored, not pushed) so the
+  build scripts work regardless of OneDrive sync state or machine.
+- run_multimodel_batch.py: skip (paper_id, model) pairs already present
+  in a project's output CSV by default, so an interrupted/partial batch
+  resumes instead of re-spending real LLM calls; --force to redo anyway.
+- Add merge_multimodel_consensus.py (per-field majority vote across
+  models) and the first complete real (non-self-comparison) gold-eval
+  run: js2/gpt-oss-120b across all 11 available Tier-1 papers.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013MnfbuaTyFx97zerx93SFH

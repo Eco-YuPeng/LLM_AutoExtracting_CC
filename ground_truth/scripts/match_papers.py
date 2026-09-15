@@ -37,7 +37,7 @@ import os
 # GHG.xlsx's "Deduplicated" sheet is the authoritative GHG ground truth
 # (confirmed 2026-09-11); it has a clean paper_id + paper_citation_APA,
 # unlike the superseded GHGTable.xlsx.
-_DEFAULT_DIR = "/Users/yupe4788/Library/CloudStorage/OneDrive-UCB-O365/1.Research 4.49.41 PM/1. Main Project/7. CC maps"
+_DEFAULT_DIR = str(Path(__file__).resolve().parents[1] / "source_data")  # ground_truth/source_data/ -- committed to git (2026-09-15), see ground_truth/README.md
 GHG_XLSX = Path(os.environ.get("GHG_XLSX_PATH", f"{_DEFAULT_DIR}/GHG.xlsx"))
 YIELD_XLSX = Path(os.environ.get("YIELD_XLSX_PATH", f"{_DEFAULT_DIR}/YieldTable.xlsx"))
 OUT_CSV = Path(__file__).resolve().parents[1] / "output" / "paper_matching.csv"

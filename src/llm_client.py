@@ -237,19 +237,26 @@ def chat(
                      f"{getattr(usage, 'completion_tokens', '?')} completion tokens, "
                      f"{len(reasoning) if reasoning else 0} reasoning chars)", flush=True)
             # Reasoning models (GLM/Qwen-thinking/...) spend completion
-            # tokens on reasoning_content before writing the real answer —
-            # a truncated response ("length") with empty content means the
+            # tokens on reasoning_content before writing the real answer, so
+            # a truncated response ("length") with EMPTY content means the
             # budget ran out during reasoning, not that the model refused.
-            # Double the budget and retry rather than treating it as a
-            # transient provider error.
-            if not text.strip() and getattr(choice, "finish_reason", None) == "length":
-                if cur_max_tokens < cfg.max_tokens_cap:
-                    cur_max_tokens = min(cur_max_tokens * 2, cfg.max_tokens_cap)
-                    last_err = RuntimeError(
-                        f"empty content, finish_reason=length at max_tokens={cur_max_tokens // 2} "
-                        f"(reasoning used {len(reasoning) if reasoning else 0} chars) — retrying with {cur_max_tokens}"
-                    )
-                    continue
+            # A truncated response with NON-empty content is just as
+            # unusable when json_mode is on -- a JSON object cut off
+            # mid-object is not valid JSON, so parse_json_response() below
+            # would raise anyway and burn a retry at the SAME max_tokens,
+            # guaranteeing the identical truncation again. Widen the budget
+            # for either case rather than only the empty-content one; only
+            # fall through to the parse attempt once we're already at the
+            # cap (nothing more to gain from retrying).
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason == "length" and cur_max_tokens < cfg.max_tokens_cap:
+                cur_max_tokens = min(cur_max_tokens * 2, cfg.max_tokens_cap)
+                reason = "empty content" if not text.strip() else f"{len(text)} char(s), likely truncated JSON"
+                last_err = RuntimeError(
+                    f"{reason}, finish_reason=length at max_tokens={cur_max_tokens // 2} "
+                    f"(reasoning used {len(reasoning) if reasoning else 0} chars) — retrying with {cur_max_tokens}"
+                )
+                continue
             if json_mode:
                 parse_json_response(text)  # validate; raise -> retry
             return text

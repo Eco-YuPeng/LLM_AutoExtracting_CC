@@ -16,3 +16,12 @@ __pycache__/
 .vscode/
 .idea/
 .Rhistory
+
+# Copyrighted source PDFs for gold-eval papers — local only, never push to GitHub
+ground_truth/pdfs/
+
+# Raw source spreadsheets (GHG.xlsx, YieldTable.xlsx) -- Yu Peng's own
+# curated data, kept locally in the working tree (scripts default to
+# reading from here, see ground_truth/README.md) but not pushed to
+# GitHub, even though this repo is private (2026-09-15).
+ground_truth/source_data/

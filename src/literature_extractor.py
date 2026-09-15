@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _dc_replace
 from pathlib import Path
 from typing import Optional
 
@@ -175,7 +175,7 @@ RESULTS_HEADING_PATTERN = re.compile(
 # is captured by RESULTS_HEADING_PATTERN's own match.
 DISCUSSION_HEADING_PATTERN = re.compile(
     r"^#{1,4}\s*\**\s*(?:\d{1,2}\.?\s*)?"
-    r"(Discussion|Conclusions?|Acknowledgy?ments?)\s*\**\s*$",
+    r"(Discussion|Conclusions?|Acknowledgy?ments?|References?|Literature\s+Cited)\s*\**\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -416,13 +416,50 @@ RESPONSE_TYPE_TO_BLOCK = {
 }
 
 
+def group_response_types_by_block(response_types: list[str]) -> list[list[str]]:
+    """
+    Group response_types by their schema block, preserving each block's
+    internal ordering. One enumerate_experimental_units() call is made
+    per GROUP, not per individual response_type -- so a paper reporting
+    all three GHG gases still gets them from ONE call (they usually
+    share one results table), while unrelated blocks (e.g. yield and
+    nitrogen, reported in different tables/sections) get separate,
+    smaller calls instead of one call trying to enumerate both at once.
+
+    This was added after a real gold-eval run (2026-09) truncated: a
+    paper with response_types=['yield', 'nitrogen'] asked one call to
+    enumerate BOTH blocks' units together, and the combined output blew
+    past max_tokens. Splitting by block roughly halves/thirds a given
+    call's output size for multi-block papers, at the cost of one extra
+    LLM call per additional block (cheap compared to a guaranteed
+    truncation-retry loop).
+    """
+    groups: dict[str, list[str]] = {}
+    for t in response_types:
+        block = RESPONSE_TYPE_TO_BLOCK.get(t, (t,))[0]
+        groups.setdefault(block, []).append(t)
+    return list(groups.values())
+
+
 def classify_response_type(abstract_text: str, results_text: Optional[str], cfg=None) -> ExtractedField:
     """
-    AGENTS.md step 5. ONE cheap LLM call reading the abstract plus the
-    first part of Results (headers/captions). Returns an ExtractedField
-    whose value is a comma-separated subset of RESPONSE_TYPE_OPTIONS —
-    a paper can hit more than one. An empty string means the paper
-    reports none of the supported response types (log and skip it).
+    AGENTS.md step 5. ONE LLM call reading the abstract plus the Results
+    section. Returns an ExtractedField whose value is a comma-separated
+    subset of RESPONSE_TYPE_OPTIONS — a paper can hit more than one. An
+    empty string means the paper reports none of the supported response
+    types (log and skip it).
+
+    Results is truncated at 30000 chars (was 8000, "keep it cheap") —
+    2026-09-15 gold-eval scoring run found this call missing GHG entirely
+    on 7 of 11 available Tier-1 papers even though gold confirms they
+    report n2o: those papers' Results sections ran 13-18k chars and the
+    GHG paragraph regularly fell past the old 8000-char cutoff (yield
+    results are conventionally reported before GHG results in this
+    literature), so the model never saw the evidence it needed. This
+    call now sees exactly as much Results text as enumerate_experimental_units
+    already does (see its own 30000-char truncation below) — no point
+    being "cheap" here if it silently drops the one paragraph the
+    classification decision hinges on.
     """
     from src import llm_client
 
@@ -435,7 +472,7 @@ def classify_response_type(abstract_text: str, results_text: Optional[str], cfg=
         "Which of these does the paper report with numeric cover-crop vs control comparisons? "
         "Only include a type if numbers for BOTH a cover crop treatment and a no-cover-crop control appear.\n\n"
         f"ABSTRACT:\n{_truncate(abstract_text, 6000)}\n\n"
-        f"RESULTS (first part):\n{_truncate(results_text, 8000)}\n\n"
+        f"RESULTS:\n{_truncate(results_text, 30000)}\n\n"
         'Answer as JSON: {"response_types": [...], "evidence": "<short quote(s)>"}'
     )
     data = llm_client.chat_json(_SYSTEM_BASE, user, purpose="classify_response_type", cfg=cfg)
@@ -517,6 +554,19 @@ def enumerate_experimental_units(
         "Every row must pair a cover-crop value with the matching no-cover-crop control value "
         "from the same year/site/factor level. If a value only appears in a figure, set it to "
         "null and put the figure reference (e.g. 'Fig. 3') in evidence.\n\n"
+        "INDEPENDENCE RULE (this decides whether something is its own row): a design combination "
+        "is a separate row ONLY if the RESULTS independently present its value -- either reported "
+        "on its own or explicitly set side-by-side against other combinations' values in the same "
+        "table/analysis. A combination that is only described in Methods but never independently "
+        "reported in Results is NOT a row.\n"
+        "REPLICATION IS NOT A FACTOR: a stated replicate/block count (e.g. 'arranged in 4 "
+        "replicate blocks') means repeated physical plots of the SAME treatment for statistical "
+        "power -- it is never a separate experimental condition and must never multiply the row "
+        "count.\n"
+        "MULTI-YEAR AVERAGES: if Results reports only a multi-year average (no separate per-year "
+        "numbers appear anywhere in the text), that is ONE row -- set `year` to the range as "
+        "stated or spanned (e.g. '2017-2019'). Never fabricate separate per-year rows/values that "
+        "are not actually in the text.\n\n"
         "COVER CROP YEARS: set cc_years_practiced to EVERY calendar year the cover crop was "
         "actually planted/grown for this unit, comma-separated (e.g. '2016,2017') -- this can "
         "differ from `year` (the single year THIS row's response value was measured in).\n\n"
@@ -535,7 +585,20 @@ def enumerate_experimental_units(
         "\"evidence\": \"<verbatim quote or table/figure ref>\"}, ... }, ... ], "
         "\"design_summary\": \"<one sentence: factors x levels x years>\"}"
     )
-    data = llm_client.chat_json(_SYSTEM_BASE, user, purpose="enumerate_experimental_units", cfg=cfg)
+    # enumerate_experimental_units' JSON output (one row per unit x
+    # response variable, several fields each) is consistently the
+    # single largest call in the pipeline. Two separate real gold-eval
+    # runs (2026-09) both truncated on the FIRST attempt at the global
+    # default max_tokens=8000 -- every call was guaranteed to burn a
+    # wasted attempt before chat()'s length-retry widened it. Give this
+    # call specifically a higher starting floor (never lower than
+    # whatever the caller configured) rather than raising the global
+    # default, which other, smaller calls (classify_response_type,
+    # extract_narrow_llm batches) don't need.
+    effective_cfg = cfg or llm_client.LLMConfig.from_env()
+    if effective_cfg.max_tokens < 16000:
+        effective_cfg = _dc_replace(effective_cfg, max_tokens=16000)
+    data = llm_client.chat_json(_SYSTEM_BASE, user, purpose="enumerate_experimental_units", cfg=effective_cfg)
 
     units: list[dict[str, ExtractedField]] = []
     for raw_unit in data.get("units", []):
@@ -952,12 +1015,21 @@ def extract_paper(paper: PaperSpec, schema: dict, data_catalog: dict, *, use_llm
         shared.update(extract_narrow_llm(methods_text, missing, schema, cfg=cfg))
 
         if response_types:
+            groups = group_response_types_by_block(response_types)
             if verbose:
-                print(f"[{Path(paper.pdf_path).name}] stage 3/3: enumerate_experimental_units...", flush=True)
-            units = enumerate_experimental_units(methods_text, sections["results"], candidates,
-                                                 response_types, schema, cfg=cfg)
-            if units:
-                report["design_summary"] = units[0].get("_design_summary", ExtractedField("", "", "", "")).value
+                print(f"[{Path(paper.pdf_path).name}] stage 3/3: enumerate_experimental_units "
+                     f"({len(groups)} block-scoped call(s): {groups})...", flush=True)
+            design_summaries = []
+            for group in groups:
+                group_units = enumerate_experimental_units(methods_text, sections["results"], candidates,
+                                                            group, schema, cfg=cfg)
+                units.extend(group_units)
+                if group_units:
+                    summary = group_units[0].get("_design_summary", ExtractedField("", "", "", "")).value
+                    if summary:
+                        design_summaries.append(summary)
+            if design_summaries:
+                report["design_summary"] = "; ".join(design_summaries)
         else:
             report["notes"].append("no supported response type detected — Block 2 left blank")
         report["llm_calls"] = llm_client.CALL_LOG[log_start:]
@@ -1001,6 +1073,15 @@ def run_extraction(workflow: ExtractionWorkflow, *, use_llm: bool = True,
         reports.append(report)
 
     if workflow.output_dir:
+        # _write_output() only mkdir's when there ARE rows to write --
+        # a single-PDF run whose paper fails outright (rows == []) hits
+        # this branch with output_dir not yet created (e.g. right after
+        # a fresh `rm -rf workflows/<project>/`, or simply the first
+        # paper processed for a brand-new project), and the report.json
+        # write below crashed with FileNotFoundError instead of the
+        # graceful "failed, skip, keep going" AGENTS.md promises. Always
+        # ensure the directory exists before writing anything into it.
+        Path(workflow.output_dir).mkdir(parents=True, exist_ok=True)
         out_path = Path(workflow.output_dir) / f"{workflow.name}.csv"
         if rows:
             out_path = _write_output(rows, workflow.output_dir, workflow.name)

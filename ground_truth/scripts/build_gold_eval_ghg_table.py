@@ -31,13 +31,30 @@ CONFIRMED by Yu Peng (2026-09-12): `CC.duration` in the source IS the
 same concept as this project's `cc_duration_years` field ("the total
 number of years cover crop was used"), so it is renamed onto that
 schema field name below rather than kept under an `extra__` prefix.
+
+CONFIRMED by Yu Peng (2026-09-15), from the first real gold-eval scoring
+pass: `ghg_n` (schema: "Replicates per treatment mean") was coming out
+blank for virtually every row because (a) it was only ever pulled from
+a per-gas `<gas>_n` column and only co2 had one wired up (n2o/ch4 got
+`None` unconditionally -- wrong, since replicate count is a property of
+the experimental design, not of which gas was measured), and (b) the
+source spreadsheet actually has TWO candidate columns for this and they
+disagree: `replications` (~30% filled, and every value we've checked
+against the source PDFs so far is correct) vs `samplesize` (100% filled
+but a constant `3` for every single row, including papers whose text
+says otherwise -- e.g. paper 11 says "four replications" -- so it reads
+as an unverified bulk-inserted placeholder from early table-building,
+not real per-paper data). Decision: `ghg_n` now maps to `replications`
+for every gas row of a paper (not gas-specific); `samplesize` is dropped
+entirely rather than kept as `extra__samplesize`, so it can't be
+mistaken for ground truth later.
 """
 import os
 from pathlib import Path
 
 import pandas as pd
 
-_DEFAULT_DIR = "/Users/yupe4788/Library/CloudStorage/OneDrive-UCB-O365/1.Research 4.49.41 PM/1. Main Project/7. CC maps"
+_DEFAULT_DIR = str(Path(__file__).resolve().parents[1] / "source_data")  # ground_truth/source_data/ -- committed to git (2026-09-15), see ground_truth/README.md
 GHG_XLSX = os.environ.get("GHG_XLSX_PATH", f"{_DEFAULT_DIR}/GHG.xlsx")
 OUT_DIR = Path(__file__).resolve().parents[1] / "output"
 
@@ -63,12 +80,24 @@ DIRECT_MAP = {
 
 GAS_COLUMNS = {
     "co2": dict(cc="co2_cc", no_cc="co2_no_cc", cc_sd="co2_cc_sd", no_cc_sd="co2_no_cc_sd",
-                unit="co2_unit", n="co2_n"),
+                unit="co2_unit"),
     "n2o": dict(cc="n2o_cc", no_cc="n2o_no_cc", cc_sd="n2o_cc_sd", no_cc_sd="n2o_no_cc_sd",
-                unit="n2o_unit", n=None),
+                unit="n2o_unit"),
     "ch4": dict(cc="ch4_cc", no_cc="ch4_no_cc", cc_sd="ch4_cc_sd", no_cc_sd="ch4_no_cc_sd",
-                unit="ch4_unit", n=None),
+                unit="ch4_unit"),
 }
+
+# ghg_n is a property of the experimental design (how many replicate
+# blocks/plots), not of which gas happened to be measured -- so unlike
+# the cc/no_cc/sd/unit columns above it is NOT read per-gas. See module
+# docstring (2026-09-15 decision) for why this is `replications`, not
+# the also-present-but-untrustworthy `samplesize` column.
+REPLICATION_SOURCE_COLUMN = "replications"
+
+# Columns dropped entirely -- never renamed onto a schema field AND never
+# kept as extra__<col>, so a superseded/untrustworthy source column can't
+# resurface later and get mistaken for ground truth.
+DROPPED_COLUMNS = {"samplesize"}
 
 
 def build_location(row) -> str:
@@ -90,13 +119,15 @@ def melt_gas_rows(dd: pd.DataFrame) -> pd.DataFrame:
         if pd.isna(base["soil_texture_raw"]):
             base["soil_texture_raw"] = row.get("soilTexture")
         # everything else, unrenamed, so nothing is silently dropped
+        replications = row.get(REPLICATION_SOURCE_COLUMN)
         for col in dd.columns:
             if col in DIRECT_MAP or col in ("id", "specific_location", "region_state",
-                                             "soil_texture", "soilTexture"):
+                                             "soil_texture", "soilTexture",
+                                             REPLICATION_SOURCE_COLUMN):
                 continue
-            if col.split("_")[0] in GAS_COLUMNS or col in (
-                "co2_unit", "n2o_unit", "ch4_unit", "co2_n"
-            ):
+            if col in DROPPED_COLUMNS:
+                continue
+            if col.split("_")[0] in GAS_COLUMNS:
                 continue
             base[f"extra__{col}"] = row.get(col)
 
@@ -113,7 +144,7 @@ def melt_gas_rows(dd: pd.DataFrame) -> pd.DataFrame:
             r["ghg_cc_sd"] = row.get(cols["cc_sd"])
             r["ghg_control_sd"] = row.get(cols["no_cc_sd"])
             r["ghg_unit"] = row.get(cols["unit"])
-            r["ghg_n"] = row.get(cols["n"]) if cols["n"] else None
+            r["ghg_n"] = replications
             out_rows.append(r)
         if not any_gas:
             # keep the row even with no GHG value reported, for traceability

@@ -39,7 +39,7 @@ from collections import defaultdict
 
 import pandas as pd
 
-_DEFAULT_DIR = "/Users/yupe4788/Library/CloudStorage/OneDrive-UCB-O365/1.Research 4.49.41 PM/1. Main Project/7. CC maps"
+_DEFAULT_DIR = str(Path(__file__).resolve().parents[1] / "source_data")  # ground_truth/source_data/ -- committed to git (2026-09-15), see ground_truth/README.md
 # GHG.xlsx's "Deduplicated" sheet is the authoritative, human-reviewed GHG
 # ground truth (confirmed 2026-09-11) -- GHGTable.xlsx / Sheet1 is a prior,
 # noisier pass that Deduplicated supersedes; every other sheet in GHG.xlsx
